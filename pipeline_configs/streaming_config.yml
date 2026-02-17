@@ -1,0 +1,50 @@
+# =============================================================================
+# Foundry Streaming Pipeline Configuration
+# =============================================================================
+# Parameters for the real-time streaming pipelines.
+
+streaming:
+  # EIA RTO Live Feed
+  eia_rto:
+    poll_interval_seconds: 300     # Poll EIA every 5 minutes for new hourly data
+    watermark_delay_minutes: 15    # Allow 15 min of late-arriving data
+    checkpoint_interval_ms: 60000  # Checkpoint state every 60 seconds
+    max_row_size_bytes: 524288     # 512 KB (Foundry limit is 1 MB)
+    target_regions:
+      - PJM      # Northern Virginia, Ohio, Pennsylvania (largest DC markets)
+      - ERCO     # Texas
+      - CISO     # California
+      - SOCO     # Georgia
+      - BPAT     # Oregon, Washington
+
+  # PJM Real-Time LMP Feed
+  pjm_lmp:
+    poll_interval_seconds: 60      # PJM updates every 5 min, poll every minute
+    watermark_delay_minutes: 5
+    checkpoint_interval_ms: 30000
+    # Focus on pricing nodes near major DC clusters
+    focus_zones:
+      - name: "Northern Virginia / Dominion"
+        description: "World's largest DC market - Loudoun County area"
+      - name: "Columbus OH / AEP"
+        description: "Growing DC hub in Ohio"
+
+  # Anomaly Detection
+  anomaly_detection:
+    threshold_pct: 10.0            # Alert when demand deviates >10% from baseline
+    severity_levels:
+      low: 10.0                    # 10-15% deviation
+      medium: 15.0                 # 15-25% deviation
+      high: 25.0                   # >25% deviation
+    cooldown_minutes: 60           # Don't re-alert for same region within 60 min
+    notification_channels:
+      - foundry_rules              # Foundry Rules for workflow triggers
+      - dashboard_banner           # Workshop dashboard alert banner
+
+# Compute resources (Foundry-specific)
+compute:
+  streaming_profile: "STREAMING"
+  driver_memory: "4g"
+  executor_memory: "4g"
+  executor_cores: 2
+  num_executors: 2                 # Scale based on data volume

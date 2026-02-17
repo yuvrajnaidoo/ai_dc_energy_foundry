@@ -1,0 +1,29 @@
+package:
+  name: ai-dc-energy
+  version: 1.0.0
+
+source:
+  path: ../
+
+build:
+  noarch: python
+  script: python -m pip install --no-deps .
+
+requirements:
+  host:
+    - python >=3.10
+    - pip
+    - setuptools
+  run:
+    - python >=3.10
+    - pyspark >=3.3.0
+    - requests >=2.28.0
+    - pandas >=1.5.0
+    - numpy >=1.23.0
+    - scipy >=1.9.0
+    - pytz >=2022.7
+    - pyyaml >=6.0
+
+# Note: transforms-python and other Foundry-specific packages
+# are provided by the Foundry platform and should NOT be listed here.
+# They are available automatically in the Foundry runtime.

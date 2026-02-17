@@ -1,0 +1,139 @@
+# =============================================================================
+# Foundry Pipeline Scheduling Configuration
+# =============================================================================
+# This file defines the build schedules for all pipelines.
+# In Foundry, schedules are configured via the UI or Schedules API.
+# This YAML serves as documentation and can be used with automation scripts.
+
+schedules:
+
+  # ─── STREAMING PIPELINES (run continuously) ────────────────────────────
+  streaming_energy_demand:
+    pipeline: /datasets/streaming/energy_demand_live
+    type: streaming
+    description: "Live EIA RTO demand — continuous processing"
+    compute_profile: STREAMING
+    auto_restart: true
+    checkpoint_interval_ms: 60000
+
+  streaming_pjm_pricing:
+    pipeline: /datasets/streaming/energy_pricing_live
+    type: streaming
+    description: "Live PJM LMP pricing — continuous processing"
+    compute_profile: STREAMING
+    auto_restart: true
+    checkpoint_interval_ms: 60000
+
+  streaming_anomaly_detection:
+    pipeline: /datasets/streaming/demand_anomalies
+    type: streaming
+    description: "Real-time anomaly detection on demand"
+    compute_profile: STREAMING
+    auto_restart: true
+
+  # ─── HOURLY PIPELINES ──────────────────────────────────────────────────
+  eia_rto_ingestion:
+    pipeline: /datasets/raw/eia_rto_demand
+    type: incremental
+    schedule: "0 * * * *"          # Every hour at :00
+    description: "Ingest EIA RTO hourly demand for top 10 BA regions"
+    parameters:
+      balancing_authorities:
+        - PJM
+        - ERCO
+        - CISO
+        - SOCO
+        - BPAT
+        - MISO
+        - NEVP
+        - SRP
+        - PSCO
+        - TVA
+
+  energy_normalization:
+    pipeline: /datasets/enriched/energy_readings_normalized
+    type: incremental
+    schedule: "15 * * * *"         # Every hour at :15 (after ingestion)
+    depends_on:
+      - eia_rto_ingestion
+
+  weather_join:
+    pipeline: /datasets/enriched/energy_weather_joined
+    type: incremental
+    schedule: "30 * * * *"         # Every hour at :30
+    depends_on:
+      - energy_normalization
+
+  # ─── DAILY PIPELINES ───────────────────────────────────────────────────
+  epoch_ai_ingestion:
+    pipeline: /datasets/raw/epoch_ai_data_centers
+    type: batch
+    schedule: "0 6 * * *"          # Daily at 06:00 UTC
+    description: "Sync Epoch AI data center database"
+
+  dc_region_enrichment:
+    pipeline: /datasets/enriched/data_centers_with_regions
+    type: batch
+    schedule: "0 7 * * *"          # Daily at 07:00 UTC
+    depends_on:
+      - epoch_ai_ingestion
+
+  dc_capacity_timeline:
+    pipeline: /datasets/enriched/regional_dc_capacity_timeline
+    type: batch
+    schedule: "0 8 * * *"          # Daily at 08:00 UTC
+    depends_on:
+      - dc_region_enrichment
+
+  correlation_engine:
+    pipeline: /datasets/analytics/correlation_events
+    type: batch
+    schedule: "0 9 * * *"          # Daily at 09:00 UTC
+    depends_on:
+      - weather_join
+      - dc_capacity_timeline
+
+  dashboard_kpis:
+    pipeline: /datasets/dashboard/kpi_summary
+    type: batch
+    schedule: "0 10 * * *"         # Daily at 10:00 UTC
+    depends_on:
+      - correlation_engine
+
+  demand_timeseries:
+    pipeline: /datasets/dashboard/demand_timeseries
+    type: incremental
+    schedule: "0 */4 * * *"        # Every 4 hours
+    depends_on:
+      - weather_join
+
+  # ─── MONTHLY PIPELINES ─────────────────────────────────────────────────
+  eia_retail_sales:
+    pipeline: /datasets/raw/eia_retail_sales
+    type: incremental
+    schedule: "0 6 1 * *"          # 1st of each month at 06:00
+    description: "Monthly retail electricity sales by state"
+    parameters:
+      states:
+        - VA
+        - TX
+        - CA
+        - GA
+        - OH
+        - PA
+        - IL
+        - AZ
+        - OR
+        - NV
+
+  regional_correlations:
+    pipeline: /datasets/analytics/regional_correlations
+    type: batch
+    schedule: "0 12 1 * *"         # 1st of month at 12:00
+    description: "Monthly Pearson/Spearman correlation update"
+
+  forecast_update:
+    pipeline: /datasets/analytics/demand_forecasts
+    type: batch
+    schedule: "0 12 1 * *"         # 1st of month at 12:00
+    description: "Update demand forecasts with latest DC plans"

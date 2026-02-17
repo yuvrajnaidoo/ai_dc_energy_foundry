@@ -1,0 +1,23 @@
+buildscript {
+    repositories {
+        // Foundry internal repository
+        maven { url "${artifactoryUrl}/libs-release" }
+    }
+}
+
+apply plugin: 'com.palantir.transforms.lang.python'
+apply plugin: 'com.palantir.transforms.lang.python-conda'
+
+transformsPython {
+    // Foundry Python Transforms plugin configuration
+    sharedModules = ['ai_dc_energy']
+}
+
+condaPython {
+    // Python version
+    pythonVersion = '3.10'
+}
+
+dependencies {
+    // Foundry transform dependencies are managed via conda_recipe/meta.yaml
+}
