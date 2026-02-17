@@ -34,12 +34,16 @@ class EpochAIEndpoints:
 
 
 class PJMEndpoints:
-    """PJM Interconnection Data Miner endpoints."""
-    BASE_URL = "https://dataminer2.pjm.com/feed"
+    """PJM Interconnection Data Miner 2 API endpoints."""
+    BASE_URL = "https://api.pjm.com/api/v1"
+    SETTINGS_URL = "https://dataminer2.pjm.com/config/settings.json"
     RT_LMP = "/rt_hrl_lmps"           # Real-time hourly LMPs
     DA_LMP = "/da_hrl_lmps"           # Day-ahead hourly LMPs
     LOAD_FORECAST = "/load_frcstd_7_day"
+    LOAD_METERED = "/hrl_load_metered"  # Hourly metered load by zone
+    LOAD_PRELIM = "/hrl_load_prelim"    # Hourly preliminary load
     GEN_BY_FUEL = "/gen_by_fuel"
+    INST_LOAD = "/inst_load"           # Instantaneous load
     CAPACITY_MARKET = "/rpm_auction_results"
 
 

@@ -1,6 +1,6 @@
 """
-PJM Interconnection Data Miner Connector
-=========================================
+PJM Interconnection Data Miner 2 Connector
+============================================
 
 Connects to PJM's Data Miner 2 API for real-time grid data.
 PJM is America's largest electric grid operator, covering the region
@@ -11,7 +11,9 @@ PJM provides 5-minute interval LMP pricing, load forecasts, and
 generation data, making it the highest-frequency data source
 in this correlation engine.
 
-Registration: Free at https://dataminer2.pjm.com
+Authentication: Uses a public subscription key fetched dynamically
+from PJM's Data Miner 2 settings endpoint. No personal API account
+required for public data access.
 """
 
 import logging
@@ -33,20 +35,53 @@ class PJMConnector:
     the top data center market globally (Northern Virginia / Loudoun County).
 
     Key data feeds:
-    - Real-time LMPs (5-minute intervals): price signals showing demand stress
+    - Real-time LMPs (hourly): price signals showing demand stress
     - Load forecasts: predicted vs actual demand
     - Generation by fuel type: source mix changes from DC load
-    - Capacity market results: long-term DC impact on capacity costs
+    - Metered load by zone: actual consumption per transmission zone
     """
 
     def __init__(self, api_key: Optional[str] = None, timeout: int = 30):
         self.base_url = PJMEndpoints.BASE_URL
-        self.api_key = api_key
         self.timeout = timeout
         self.session = requests.Session()
         self.session.headers.update({"Accept": "application/json"})
+
+        # Use provided key or fetch the public key from Data Miner 2
         if api_key:
-            self.session.headers.update({"Ocp-Apim-Subscription-Key": api_key})
+            self._subscription_key = api_key
+        else:
+            self._subscription_key = self._fetch_public_subscription_key()
+
+        self.session.headers.update({
+            "Ocp-Apim-Subscription-Key": self._subscription_key,
+        })
+
+    @staticmethod
+    def _fetch_public_subscription_key() -> str:
+        """
+        Fetch the public subscription key from PJM Data Miner 2 settings.
+
+        PJM publishes this key at a well-known URL so their Angular web
+        app can access the API. The key rotates periodically, so we
+        fetch it dynamically rather than hardcoding.
+        """
+        try:
+            response = requests.get(
+                PJMEndpoints.SETTINGS_URL,
+                timeout=10,
+            )
+            response.raise_for_status()
+            settings = response.json()
+            key = settings["subscriptionKey"]
+            logger.info("Fetched PJM public subscription key successfully")
+            return key
+        except Exception as e:
+            logger.error(f"Failed to fetch PJM subscription key: {e}")
+            raise RuntimeError(
+                "Cannot fetch PJM Data Miner 2 subscription key from "
+                f"{PJMEndpoints.SETTINGS_URL}: {e}"
+            )
 
     def get_realtime_lmp(
         self,
@@ -63,7 +98,7 @@ class PJMConnector:
         clusters indicate demand stress from DC loads.
 
         Args:
-            start: Start datetime (ISO format)
+            start: Start datetime (M/D/YYYY HH:MM format for PJM)
             end: End datetime
             pnode_ids: Specific pricing node IDs (e.g., Loudoun County nodes)
             row_count: Maximum rows to return
@@ -73,24 +108,52 @@ class PJMConnector:
         """
         params = {
             "rowCount": row_count,
-            "sort": "datetime_beginning_ept desc",
-            "fields": "datetime_beginning_ept,pnode_id,pnode_name,"
-                      "total_lmp_rt,energy_lmp_rt,congestion_lmp_rt,loss_lmp_rt",
+            "sort": "datetime_beginning_ept",
+            "order": "desc",
+            "startRow": 1,
+            "isActiveMetadata": "true",
         }
 
-        if start:
-            params["datetime_beginning_ept"] = f">={start}"
-        if end:
-            # PJM uses a specific filter syntax
-            if "datetime_beginning_ept" in params:
-                params["datetime_beginning_ept"] += f" AND <={end}"
-            else:
-                params["datetime_beginning_ept"] = f"<={end}"
+        if start and end:
+            params["datetime_beginning_ept"] = f"{start}to{end}"
+        elif start:
+            params["datetime_beginning_ept"] = f"{start}to"
 
         if pnode_ids:
-            params["pnode_id"] = ",".join(str(p) for p in pnode_ids)
+            params["pnode_id"] = ";".join(str(p) for p in pnode_ids)
 
         return self._make_request(PJMEndpoints.RT_LMP, params)
+
+    def get_load_metered(
+        self,
+        start: Optional[str] = None,
+        end: Optional[str] = None,
+        row_count: int = 5000,
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetch hourly metered load by transmission zone.
+
+        Provides actual metered consumption per PJM zone, which is
+        the most accurate load measurement available.
+
+        Args:
+            start: Start datetime
+            end: End datetime
+            row_count: Maximum rows
+
+        Returns:
+            Hourly metered load records per zone
+        """
+        params = {
+            "rowCount": row_count,
+            "sort": "datetime_beginning_ept",
+            "order": "desc",
+            "startRow": 1,
+            "isActiveMetadata": "true",
+        }
+        if start and end:
+            params["datetime_beginning_ept"] = f"{start}to{end}"
+        return self._make_request(PJMEndpoints.LOAD_METERED, params)
 
     def get_load_forecast(
         self,
@@ -110,7 +173,10 @@ class PJMConnector:
         """
         params = {
             "rowCount": 5000,
-            "sort": "forecast_datetime_beginning_ept desc",
+            "sort": "forecast_datetime_beginning_ept",
+            "order": "desc",
+            "startRow": 1,
+            "isActiveMetadata": "true",
         }
         return self._make_request(PJMEndpoints.LOAD_FORECAST, params)
 
@@ -134,40 +200,36 @@ class PJMConnector:
         """
         params = {
             "rowCount": 5000,
-            "sort": "datetime_beginning_ept desc",
+            "sort": "datetime_beginning_ept",
+            "order": "desc",
+            "startRow": 1,
+            "isActiveMetadata": "true",
         }
-        if start:
-            params["datetime_beginning_ept"] = f">={start}"
+        if start and end:
+            params["datetime_beginning_ept"] = f"{start}to{end}"
 
         return self._make_request(PJMEndpoints.GEN_BY_FUEL, params)
 
-    def get_capacity_market_results(
-        self,
-        delivery_year: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
+    def get_instantaneous_load(self) -> List[Dict[str, Any]]:
         """
-        Fetch capacity market auction results.
-
-        PJM's capacity market is where the $9.3 billion price increase
-        from data center demand was recorded in 2025-26. This data
-        quantifies the long-term cost impact.
-
-        Args:
-            delivery_year: Specific delivery year (e.g., '2025/2026')
+        Fetch the most recent instantaneous load snapshot.
 
         Returns:
-            Auction results with clearing prices, offered/cleared capacity
+            Current instantaneous load records
         """
-        params = {"rowCount": 5000}
-        if delivery_year:
-            params["delivery_year"] = delivery_year
-
-        return self._make_request(PJMEndpoints.CAPACITY_MARKET, params)
+        params = {
+            "rowCount": 100,
+            "sort": "datetime_beginning_ept",
+            "order": "desc",
+            "startRow": 1,
+            "isActiveMetadata": "true",
+        }
+        return self._make_request(PJMEndpoints.INST_LOAD, params)
 
     def _make_request(
         self, endpoint: str, params: Dict[str, Any]
     ) -> List[Dict[str, Any]]:
-        """Execute request to PJM Data Miner."""
+        """Execute paginated request to PJM Data Miner 2 API."""
         url = f"{self.base_url}{endpoint}"
 
         try:
@@ -175,20 +237,83 @@ class PJMConnector:
             response.raise_for_status()
             data = response.json()
 
-            # PJM returns items in a list or in an 'items' key
-            if isinstance(data, list):
+            # PJM API returns items in an 'items' key with pagination links
+            if isinstance(data, dict):
+                return data.get("items", [])
+            elif isinstance(data, list):
                 return data
-            elif isinstance(data, dict):
-                return data.get("items", data.get("data", []))
             return []
 
+        except requests.exceptions.HTTPError as e:
+            if e.response is not None and e.response.status_code == 401:
+                logger.warning("PJM key expired, refreshing...")
+                self._subscription_key = self._fetch_public_subscription_key()
+                self.session.headers.update({
+                    "Ocp-Apim-Subscription-Key": self._subscription_key,
+                })
+                # Retry once
+                response = self.session.get(url, params=params, timeout=self.timeout)
+                response.raise_for_status()
+                data = response.json()
+                return data.get("items", []) if isinstance(data, dict) else data
+            logger.error(f"PJM Data Miner request failed: {e}")
+            raise
         except requests.exceptions.RequestException as e:
             logger.error(f"PJM Data Miner request failed: {e}")
             raise
 
+    def fetch_paginated(
+        self, endpoint: str, params: Dict[str, Any], max_pages: int = 10
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetch all pages of results from a PJM endpoint.
+
+        PJM API returns pagination links in the response. This method
+        follows 'next' links to retrieve complete datasets.
+
+        Args:
+            endpoint: API endpoint path
+            params: Query parameters
+            max_pages: Safety limit on pagination
+
+        Returns:
+            Combined list of all items across pages
+        """
+        all_items = []
+        url = f"{self.base_url}{endpoint}"
+        page = 0
+
+        while url and page < max_pages:
+            try:
+                response = self.session.get(url, params=params, timeout=self.timeout)
+                response.raise_for_status()
+                data = response.json()
+
+                items = data.get("items", [])
+                all_items.extend(items)
+
+                if not items:
+                    break
+
+                # Follow pagination: find 'next' link
+                links = data.get("links", [])
+                next_link = next(
+                    (link["href"] for link in links if link.get("rel") == "next"),
+                    None,
+                )
+                url = next_link
+                params = {}  # Params are embedded in the next URL
+                page += 1
+
+            except requests.exceptions.RequestException as e:
+                logger.error(f"PJM pagination failed on page {page}: {e}")
+                break
+
+        logger.info(f"Fetched {len(all_items)} total items across {page + 1} pages")
+        return all_items
+
 
 # PJM pricing node IDs for key data center markets
-# These are approximate — actual pnode IDs should be verified in PJM's system
 DC_MARKET_PNODES = {
     "loudoun_county_va": [
         # Northern Virginia (world's largest DC market)

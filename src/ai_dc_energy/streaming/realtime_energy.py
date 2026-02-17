@@ -237,7 +237,7 @@ def process_live_pricing(pjm_stream, output):
         F.col("total_lmp_rt").cast(DoubleType())
     ).withColumn(
         "congestion_lmp",
-        F.col("congestion_lmp_rt").cast(DoubleType())
+        F.col("congestion_price_rt").cast(DoubleType())
     )
 
     # Flag congestion-driven price spikes (congestion > $50/MWh suggests local grid stress)
@@ -255,8 +255,8 @@ def process_live_pricing(pjm_stream, output):
         F.col("pnode_name"),
         "total_lmp",
         "congestion_lmp",
-        F.col("energy_lmp_rt").cast(DoubleType()).alias("energy_lmp"),
-        F.col("loss_lmp_rt").cast(DoubleType()).alias("loss_lmp"),
+        F.col("system_energy_price_rt").cast(DoubleType()).alias("energy_lmp"),
+        F.col("marginal_loss_price_rt").cast(DoubleType()).alias("loss_lmp"),
         "congestion_alert",
         "price_spike_alert",
         F.current_timestamp().alias("processing_timestamp"),
