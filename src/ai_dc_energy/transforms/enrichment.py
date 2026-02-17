@@ -20,21 +20,18 @@ from ai_dc_energy.utils.constants import (
     TOP_DC_STATES,
 )
 
-# -----------------------------------------------------------------------
-# Foundry transform imports (uncomment in Foundry):
-# from transforms.api import transform, Input, Output
-# -----------------------------------------------------------------------
+from transforms.api import transform, Input, Output
 
 
 # =============================================================================
 # TRANSFORM: Normalize Energy Readings
 # =============================================================================
 
-# @transform(
-#     raw_rto=Input("/datasets/raw/eia_rto_demand"),
-#     output=Output("/datasets/enriched/energy_readings_normalized"),
-# )
-def normalize_energy_readings(raw_rto: DataFrame) -> DataFrame:
+@transform(
+    raw_rto=Input("/datasets/raw/eia_rto_demand"),
+    output=Output("/datasets/enriched/energy_readings_normalized"),
+)
+def normalize_energy_readings(raw_rto, output):
     """
     Normalize raw EIA RTO data into standardized energy readings.
 
@@ -45,12 +42,13 @@ def normalize_energy_readings(raw_rto: DataFrame) -> DataFrame:
     4. Generate unique reading IDs
 
     Args:
-        raw_rto: Raw EIA RTO demand DataFrame
+        raw_rto: Foundry input (raw EIA RTO demand)
+        output: Foundry output dataset handle
 
     Returns:
         Normalized energy readings DataFrame
     """
-    df = raw_rto
+    df = raw_rto.dataframe()
 
     # Parse EIA period format (e.g., "2024-01-15T14") to timestamp
     df = df.withColumn(
@@ -98,18 +96,18 @@ def normalize_energy_readings(raw_rto: DataFrame) -> DataFrame:
         F.col("ingestion_timestamp"),
     )
 
-    return df
+    output.write_dataframe(df)
 
 
 # =============================================================================
 # TRANSFORM: Enrich Data Centers with Region Mapping
 # =============================================================================
 
-# @transform(
-#     raw_dcs=Input("/datasets/raw/epoch_ai_data_centers"),
-#     output=Output("/datasets/enriched/data_centers_with_regions"),
-# )
-def enrich_data_centers_with_regions(raw_dcs: DataFrame) -> DataFrame:
+@transform(
+    raw_dcs=Input("/datasets/raw/epoch_ai_data_centers"),
+    output=Output("/datasets/enriched/data_centers_with_regions"),
+)
+def enrich_data_centers_with_regions(raw_dcs, output):
     """
     Enrich data center records with energy region mappings.
 
@@ -118,11 +116,14 @@ def enrich_data_centers_with_regions(raw_dcs: DataFrame) -> DataFrame:
     DC capacity and energy consumption data.
 
     Args:
-        raw_dcs: Raw data center DataFrame from Epoch AI
+        raw_dcs: Foundry input (raw data center records from Epoch AI)
+        output: Foundry output dataset handle
 
     Returns:
         Data centers with region_id and balancing_authority columns added
     """
+    raw_dcs_df = raw_dcs.dataframe()
+
     # Build state-to-BA mapping from constants
     state_ba_mapping = []
     for market, bas in DC_MARKET_TO_BA.items():
@@ -149,16 +150,15 @@ def enrich_data_centers_with_regions(raw_dcs: DataFrame) -> DataFrame:
     }
 
     # Create broadcast mapping
-    from pyspark.sql import SparkSession
-    spark = raw_dcs.sparkSession
+    spark = raw_dcs_df.sparkSession
 
     mapping_rows = [(k, v) for k, v in state_to_primary_ba.items()]
     mapping_df = spark.createDataFrame(mapping_rows, ["state_code", "balancing_authority"])
 
     # Join DCs with BA mapping
-    df = raw_dcs.join(
+    df = raw_dcs_df.join(
         mapping_df,
-        raw_dcs["state"] == mapping_df["state_code"],
+        raw_dcs_df["state"] == mapping_df["state_code"],
         how="left"
     ).drop("state_code")
 
@@ -168,19 +168,19 @@ def enrich_data_centers_with_regions(raw_dcs: DataFrame) -> DataFrame:
         F.lower(F.coalesce(F.col("balancing_authority"), F.lit("unknown")))
     )
 
-    return df
+    output.write_dataframe(df)
 
 
 # =============================================================================
 # TRANSFORM: Join Energy Readings with Weather Data
 # =============================================================================
 
-# @transform(
-#     energy=Input("/datasets/enriched/energy_readings_normalized"),
-#     weather=Input("/datasets/raw/noaa_weather"),
-#     output=Output("/datasets/enriched/energy_weather_joined"),
-# )
-def join_energy_with_weather(energy: DataFrame, weather: DataFrame) -> DataFrame:
+@transform(
+    energy=Input("/datasets/enriched/energy_readings_normalized"),
+    weather=Input("/datasets/raw/noaa_weather"),
+    output=Output("/datasets/enriched/energy_weather_joined"),
+)
+def join_energy_with_weather(energy, weather, output):
     """
     Join energy readings with NOAA weather data for normalization.
 
@@ -194,22 +194,26 @@ def join_energy_with_weather(energy: DataFrame, weather: DataFrame) -> DataFrame
     - The residual after weather adjustment = base load + DC load
 
     Args:
-        energy: Normalized energy readings
-        weather: NOAA daily temperature data
+        energy: Foundry input (normalized energy readings)
+        weather: Foundry input (NOAA daily temperature data)
+        output: Foundry output dataset handle
 
     Returns:
         Energy readings enriched with temperature and CDD/HDD
     """
+    energy_df = energy.dataframe()
+    weather_df = weather.dataframe()
+
     # Extract date from energy timestamps for daily weather join
-    energy_daily = energy.withColumn(
+    energy_daily = energy_df.withColumn(
         "reading_date",
         F.to_date(F.col("timestamp"))
     )
 
     # Weather should have: station_id, date, avg_temp, cdd, hdd
     # Join on region and date (assuming weather has been pre-mapped to regions)
-    if weather is not None and weather.count() > 0:
-        weather_daily = weather.select(
+    try:
+        weather_daily = weather_df.select(
             F.col("region_id").alias("w_region_id"),
             F.col("date").alias("w_date"),
             F.col("avg_temp_f"),
@@ -233,20 +237,20 @@ def join_energy_with_weather(energy: DataFrame, weather: DataFrame) -> DataFrame
             F.coalesce(F.col("cooling_degree_days"), F.col("cdd"))
         ).drop("avg_temp_f", "cdd", "hdd", "reading_date")
 
-        return joined
-
-    return energy_daily.drop("reading_date")
+        output.write_dataframe(joined)
+    except Exception:
+        output.write_dataframe(energy_daily.drop("reading_date"))
 
 
 # =============================================================================
 # TRANSFORM: Compute Regional DC Capacity Timeline
 # =============================================================================
 
-# @transform(
-#     dcs=Input("/datasets/enriched/data_centers_with_regions"),
-#     output=Output("/datasets/enriched/regional_dc_capacity_timeline"),
-# )
-def compute_regional_dc_capacity_timeline(dcs: DataFrame) -> DataFrame:
+@transform(
+    dcs=Input("/datasets/enriched/data_centers_with_regions"),
+    output=Output("/datasets/enriched/regional_dc_capacity_timeline"),
+)
+def compute_regional_dc_capacity_timeline(dcs, output):
     """
     Compute cumulative data center capacity over time per region.
 
@@ -263,13 +267,16 @@ def compute_regional_dc_capacity_timeline(dcs: DataFrame) -> DataFrame:
     - latest_dc_added (name of most recent DC to come online)
 
     Args:
-        dcs: Enriched data centers with regions
+        dcs: Foundry input (enriched data centers with regions)
+        output: Foundry output dataset handle
 
     Returns:
         Monthly timeline of DC capacity per region
     """
+    dcs_df = dcs.dataframe()
+
     # Filter to operational DCs with known dates
-    operational = dcs.filter(
+    operational = dcs_df.filter(
         (F.col("construction_status") == "operational")
         & F.col("operational_date").isNotNull()
         & F.col("capacity_mw").isNotNull()
@@ -324,7 +331,7 @@ def compute_regional_dc_capacity_timeline(dcs: DataFrame) -> DataFrame:
         F.sum("period_gpu_count").over(cum_window)
     )
 
-    return timeline.select(
+    output.write_dataframe(timeline.select(
         "region_id",
         F.col("online_month").alias("date"),
         "cumulative_capacity_mw",
@@ -332,4 +339,4 @@ def compute_regional_dc_capacity_timeline(dcs: DataFrame) -> DataFrame:
         "cumulative_dc_count",
         "cumulative_gpu_count",
         "latest_dc_added",
-    )
+    ))

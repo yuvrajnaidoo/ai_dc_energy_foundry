@@ -31,10 +31,7 @@ from ai_dc_energy.utils.constants import CorrelationConfig
 
 logger = logging.getLogger(__name__)
 
-# -----------------------------------------------------------------------
-# Foundry transform imports (uncomment in Foundry):
-# from transforms.api import transform, Input, Output
-# -----------------------------------------------------------------------
+from transforms.api import transform, Input, Output
 
 CORRELATION_EVENT_SCHEMA = StructType([
     StructField("event_id", StringType(), False),
@@ -67,17 +64,13 @@ CORRELATION_EVENT_SCHEMA = StructType([
 # MAIN CORRELATION TRANSFORM
 # =============================================================================
 
-# @transform(
-#     energy_readings=Input("/datasets/enriched/energy_weather_joined"),
-#     dc_timeline=Input("/datasets/enriched/regional_dc_capacity_timeline"),
-#     data_centers=Input("/datasets/enriched/data_centers_with_regions"),
-#     output=Output("/datasets/analytics/correlation_events"),
-# )
-def compute_correlation_events(
-    energy_readings: DataFrame,
-    dc_timeline: DataFrame,
-    data_centers: DataFrame,
-) -> DataFrame:
+@transform(
+    energy_readings=Input("/datasets/enriched/energy_weather_joined"),
+    dc_timeline=Input("/datasets/enriched/regional_dc_capacity_timeline"),
+    data_centers=Input("/datasets/enriched/data_centers_with_regions"),
+    output=Output("/datasets/analytics/correlation_events"),
+)
+def compute_correlation_events(energy_readings, dc_timeline, data_centers, output):
     """
     Compute before/after correlation events for each data center deployment.
 
@@ -86,161 +79,193 @@ def compute_correlation_events(
     2. Defines post-period (operational_date to now or analysis window)
     3. Computes average demand in both periods
     4. Calculates delta (absolute MW and percentage)
-    5. Runs correlation between cumulative DC capacity and demand
-    6. Assigns a confidence score
+    5. Assigns a confidence score
+
+    Fully distributed — uses Spark joins and window functions instead of
+    collect() to ensure scalability on large datasets.
 
     Args:
-        energy_readings: Hourly energy readings with weather adjustment
-        dc_timeline: Regional DC capacity timeline
-        data_centers: Individual DC records with operational dates
+        energy_readings: Foundry input (hourly energy readings)
+        dc_timeline: Foundry input (regional DC capacity timeline)
+        data_centers: Foundry input (individual DC records)
+        output: Foundry output dataset handle
 
     Returns:
         DataFrame of CorrelationEvent records
     """
-    spark = energy_readings.sparkSession
+    energy_df = energy_readings.dataframe()
+    data_centers_df = data_centers.dataframe()
+    spark = energy_df.sparkSession
     config = CorrelationConfig
 
     # Get DCs that have come online (have operational dates)
-    online_dcs = data_centers.filter(
+    online_dcs = data_centers_df.filter(
         (F.col("construction_status") == "operational")
         & F.col("operational_date").isNotNull()
         & F.col("region_id").isNotNull()
     ).select(
-        "dc_id", "name", "region_id", "operational_date", "capacity_mw"
+        F.col("dc_id"),
+        F.col("name").alias("dc_name"),
+        F.col("region_id").alias("dc_region_id"),
+        F.col("operational_date"),
+        F.col("capacity_mw"),
+    )
+
+    # Filter DCs with enough post-operational data
+    today = F.current_date()
+    online_dcs = online_dcs.withColumn(
+        "months_since_op",
+        F.months_between(today, F.col("operational_date")).cast("int")
+    ).filter(
+        F.col("months_since_op") >= config.MIN_POST_MONTHS
+    )
+
+    # Compute period boundaries for each DC
+    online_dcs = online_dcs.withColumn(
+        "pre_period_start",
+        F.add_months(F.col("operational_date"), -config.BASELINE_MONTHS)
+    ).withColumn(
+        "pre_period_end",
+        F.add_months(F.col("operational_date"), -1)
+    ).withColumn(
+        "post_period_start",
+        F.col("operational_date")
+    ).withColumn(
+        "post_period_end",
+        F.least(
+            F.add_months(F.col("operational_date"), config.DEFAULT_ANALYSIS_WINDOW),
+            today,
+        )
     )
 
     # Aggregate energy readings to monthly averages per region
-    monthly_energy = energy_readings.withColumn(
+    monthly_energy = energy_df.withColumn(
         "month", F.date_trunc("month", F.col("timestamp"))
     ).groupBy("region_id", "month").agg(
         F.avg("demand_mw").alias("avg_demand_mw"),
         F.count("*").alias("reading_count"),
-        F.avg("temperature_f").alias("avg_temp_f"),
     )
 
-    # For each DC, compute the before/after analysis
-    # This uses a cross-join approach — in production, consider
-    # partitioning or map-side join for performance
-    analysis_results = []
+    # Join DCs with monthly energy on region_id
+    joined = online_dcs.join(
+        monthly_energy,
+        online_dcs["dc_region_id"] == monthly_energy["region_id"],
+        how="inner",
+    )
 
-    dc_rows = online_dcs.collect()
+    # Flag each month as pre-period or post-period for each DC
+    joined = joined.withColumn(
+        "is_pre",
+        (F.col("month") >= F.col("pre_period_start"))
+        & (F.col("month") <= F.col("pre_period_end"))
+    ).withColumn(
+        "is_post",
+        (F.col("month") >= F.col("post_period_start"))
+        & (F.col("month") <= F.col("post_period_end"))
+    )
 
-    for dc_row in dc_rows:
-        dc_id = dc_row["dc_id"]
-        dc_name = dc_row["name"]
-        region_id = dc_row["region_id"]
-        op_date = dc_row["operational_date"]
-        dc_capacity = dc_row["capacity_mw"]
+    # Compute pre-period and post-period stats per DC
+    pre_stats = joined.filter(F.col("is_pre")).groupBy("dc_id").agg(
+        F.avg("avg_demand_mw").alias("pre_period_avg_demand_mw"),
+        F.count("*").alias("pre_months"),
+    )
 
-        if op_date is None or region_id is None:
-            continue
+    post_stats = joined.filter(F.col("is_post")).groupBy("dc_id").agg(
+        F.avg("avg_demand_mw").alias("post_period_avg_demand_mw"),
+        F.count("*").alias("post_months"),
+    )
 
-        # Filter energy data for this region
-        region_energy = monthly_energy.filter(F.col("region_id") == region_id)
+    # Join pre and post stats back to DCs
+    results = online_dcs.join(pre_stats, "dc_id", "inner") \
+                         .join(post_stats, "dc_id", "inner")
 
-        # Define periods
-        from dateutil.relativedelta import relativedelta
-        pre_start = op_date - relativedelta(months=config.BASELINE_MONTHS)
-        pre_end = op_date - relativedelta(months=1)
-        post_start = op_date
-        # Use analysis window or current date
-        post_end_candidate = op_date + relativedelta(
-            months=config.DEFAULT_ANALYSIS_WINDOW
+    # Filter out rows where either average is null
+    results = results.filter(
+        F.col("pre_period_avg_demand_mw").isNotNull()
+        & F.col("post_period_avg_demand_mw").isNotNull()
+    )
+
+    # Compute deltas
+    results = results.withColumn(
+        "delta_demand_mw",
+        F.col("post_period_avg_demand_mw") - F.col("pre_period_avg_demand_mw")
+    ).withColumn(
+        "delta_demand_pct",
+        F.when(
+            F.col("pre_period_avg_demand_mw") != 0,
+            F.col("delta_demand_mw") / F.col("pre_period_avg_demand_mw") * 100
+        ).otherwise(None)
+    )
+
+    # Compute data completeness
+    results = results.withColumn(
+        "expected_total",
+        F.lit(config.BASELINE_MONTHS) + F.least(
+            F.lit(config.DEFAULT_ANALYSIS_WINDOW),
+            F.col("months_since_op")
         )
-        today = datetime.now().date()
-        post_end = min(post_end_candidate, today)
-
-        # Check minimum post period
-        months_since = (today.year - op_date.year) * 12 + (today.month - op_date.month)
-        if months_since < config.MIN_POST_MONTHS:
-            continue  # Not enough post-DC data yet
-
-        # Compute pre-period average
-        pre_data = region_energy.filter(
-            (F.col("month") >= F.lit(pre_start))
-            & (F.col("month") <= F.lit(pre_end))
+    ).withColumn(
+        "data_completeness",
+        F.least(
+            F.lit(1.0),
+            (F.col("pre_months") + F.col("post_months"))
+            / F.greatest(F.lit(1), F.col("expected_total"))
         )
-        pre_stats = pre_data.agg(
-            F.avg("avg_demand_mw").alias("pre_avg"),
-            F.count("*").alias("pre_months"),
-        ).collect()[0]
+    )
 
-        # Compute post-period average
-        post_data = region_energy.filter(
-            (F.col("month") >= F.lit(post_start))
-            & (F.col("month") <= F.lit(post_end))
+    # Compute confidence score using Spark column expressions
+    completeness_score = F.least(
+        F.lit(1.0),
+        F.col("data_completeness") / F.lit(config.MIN_DATA_COMPLETENESS)
+    )
+    pre_score = F.least(F.lit(1.0), F.col("pre_months") / F.lit(config.BASELINE_MONTHS))
+    post_score = F.least(F.lit(1.0), F.col("post_months") / F.lit(config.DEFAULT_ANALYSIS_WINDOW))
+    snr_score = F.when(
+        (F.col("pre_period_avg_demand_mw") > 0) & F.col("capacity_mw").isNotNull(),
+        F.least(F.lit(1.0), F.col("capacity_mw") / F.col("pre_period_avg_demand_mw") / F.lit(0.10))
+    ).otherwise(F.lit(0.1))
+
+    results = results.withColumn(
+        "confidence_score",
+        F.round(
+            F.least(F.lit(1.0), F.greatest(F.lit(0.0),
+                F.lit(0.3) * completeness_score
+                + F.lit(0.2) * pre_score
+                + F.lit(0.2) * post_score
+                + F.lit(0.3) * snr_score
+            )), 3
         )
-        post_stats = post_data.agg(
-            F.avg("avg_demand_mw").alias("post_avg"),
-            F.count("*").alias("post_months"),
-        ).collect()[0]
+    )
 
-        pre_avg = pre_stats["pre_avg"]
-        post_avg = post_stats["post_avg"]
-        pre_months = pre_stats["pre_months"]
-        post_months = post_stats["post_months"]
+    # Build final output
+    result_df = results.select(
+        F.concat_ws("_", F.lit("corr"), F.col("dc_id"), F.col("dc_region_id"),
+                     F.date_format(today, "yyyy-MM-dd")).alias("event_id"),
+        F.col("dc_id"),
+        F.col("dc_name"),
+        F.col("dc_region_id").alias("region_id"),
+        today.alias("analysis_date"),
+        F.col("pre_period_start"),
+        F.col("pre_period_end"),
+        F.col("post_period_start"),
+        F.col("post_period_end"),
+        F.col("pre_period_avg_demand_mw"),
+        F.col("post_period_avg_demand_mw"),
+        F.col("delta_demand_mw"),
+        F.col("delta_demand_pct"),
+        F.lit(None).cast("double").alias("pearson_correlation"),
+        F.lit(None).cast("double").alias("spearman_correlation"),
+        F.lit(None).cast("double").alias("p_value"),
+        F.col("confidence_score"),
+        F.lit(None).cast("string").alias("control_region_id"),
+        F.lit(None).cast("double").alias("control_delta_pct"),
+        F.lit(None).cast("double").alias("adjusted_delta_pct"),
+        F.lit(config.DEFAULT_ANALYSIS_WINDOW).alias("analysis_window_months"),
+        F.col("data_completeness"),
+        F.lit("difference_in_differences_v1").alias("methodology"),
+    )
 
-        if pre_avg is None or post_avg is None:
-            continue
-
-        # Compute deltas
-        delta_mw = post_avg - pre_avg
-        delta_pct = (delta_mw / pre_avg * 100) if pre_avg != 0 else None
-
-        # Compute data completeness
-        expected_pre = config.BASELINE_MONTHS
-        expected_post = min(config.DEFAULT_ANALYSIS_WINDOW, months_since)
-        total_expected = expected_pre + expected_post
-        total_actual = (pre_months or 0) + (post_months or 0)
-        completeness = min(1.0, total_actual / max(1, total_expected))
-
-        # Compute confidence score
-        confidence = _compute_confidence_score(
-            pre_months=pre_months,
-            post_months=post_months,
-            data_completeness=completeness,
-            dc_capacity_mw=dc_capacity,
-            pre_avg_demand=pre_avg,
-        )
-
-        # Correlation coefficients would be computed here using
-        # scipy.stats.pearsonr and spearmanr on the monthly time series
-        # of cumulative DC capacity vs demand. Placeholder values below.
-        pearson_r = None  # Computed in production via scipy
-        spearman_r = None
-        p_value = None
-
-        event = {
-            "event_id": f"corr_{dc_id}_{region_id}_{today.isoformat()}",
-            "dc_id": dc_id,
-            "dc_name": dc_name,
-            "region_id": region_id,
-            "analysis_date": today,
-            "pre_period_start": pre_start,
-            "pre_period_end": pre_end,
-            "post_period_start": post_start,
-            "post_period_end": post_end,
-            "pre_period_avg_demand_mw": float(pre_avg),
-            "post_period_avg_demand_mw": float(post_avg),
-            "delta_demand_mw": float(delta_mw),
-            "delta_demand_pct": float(delta_pct) if delta_pct else None,
-            "pearson_correlation": pearson_r,
-            "spearman_correlation": spearman_r,
-            "p_value": p_value,
-            "confidence_score": confidence,
-            "control_region_id": None,   # Populated by control matching
-            "control_delta_pct": None,
-            "adjusted_delta_pct": None,
-            "analysis_window_months": config.DEFAULT_ANALYSIS_WINDOW,
-            "data_completeness": completeness,
-            "methodology": "difference_in_differences_v1",
-        }
-        analysis_results.append(event)
-
-    if not analysis_results:
-        return spark.createDataFrame([], CORRELATION_EVENT_SCHEMA)
-
-    return spark.createDataFrame(analysis_results, schema=CORRELATION_EVENT_SCHEMA)
+    output.write_dataframe(result_df)
 
 
 def _compute_confidence_score(
@@ -293,89 +318,74 @@ def _compute_confidence_score(
 # TRANSFORM: Compute Regional Correlation Coefficients
 # =============================================================================
 
-# @transform(
-#     energy_monthly=Input("/datasets/enriched/energy_readings_monthly"),
-#     dc_timeline=Input("/datasets/enriched/regional_dc_capacity_timeline"),
-#     output=Output("/datasets/analytics/regional_correlations"),
-# )
-def compute_regional_correlations(
-    energy_monthly: DataFrame,
-    dc_timeline: DataFrame,
-) -> DataFrame:
+@transform(
+    energy_monthly=Input("/datasets/enriched/energy_readings_monthly"),
+    dc_timeline=Input("/datasets/enriched/regional_dc_capacity_timeline"),
+    output=Output("/datasets/analytics/regional_correlations"),
+)
+def compute_regional_correlations(energy_monthly, dc_timeline, output):
     """
-    Compute Pearson and Spearman correlation coefficients between
-    cumulative DC capacity and regional energy demand over time.
+    Compute Pearson correlation coefficients between cumulative DC
+    capacity and regional energy demand over time.
 
-    This provides a single correlation metric per region showing
-    how strongly DC growth is associated with energy consumption growth.
-
-    Uses PySpark's built-in correlation or pandas UDF with scipy
-    for statistical testing.
+    Uses a pandas UDF to compute per-region correlations in a
+    distributed manner without collect().
 
     Args:
-        energy_monthly: Monthly average energy demand per region
-        dc_timeline: Monthly cumulative DC capacity per region
+        energy_monthly: Foundry input (monthly average energy demand)
+        dc_timeline: Foundry input (monthly cumulative DC capacity)
+        output: Foundry output dataset handle
 
     Returns:
         DataFrame with correlation coefficients per region
     """
+    energy_monthly_df = energy_monthly.dataframe()
+    dc_timeline_df = dc_timeline.dataframe()
+
     # Join energy demand with DC capacity timeline
-    joined = energy_monthly.join(
-        dc_timeline,
-        (energy_monthly["region_id"] == dc_timeline["region_id"])
-        & (energy_monthly["month"] == dc_timeline["date"]),
+    joined = energy_monthly_df.join(
+        dc_timeline_df,
+        (energy_monthly_df["region_id"] == dc_timeline_df["region_id"])
+        & (energy_monthly_df["month"] == dc_timeline_df["date"]),
         how="inner",
     ).select(
-        energy_monthly["region_id"],
-        energy_monthly["month"],
-        energy_monthly["avg_demand_mw"],
-        dc_timeline["cumulative_capacity_mw"],
-        dc_timeline["cumulative_ai_capacity_mw"],
+        energy_monthly_df["region_id"],
+        energy_monthly_df["month"],
+        energy_monthly_df["avg_demand_mw"],
+        dc_timeline_df["cumulative_capacity_mw"],
+        dc_timeline_df["cumulative_ai_capacity_mw"],
     )
 
-    # Compute Pearson correlation per region using built-in Spark
-    # For more advanced stats (p-values), use a pandas UDF
-    from pyspark.ml.stat import Correlation
-    from pyspark.ml.feature import VectorAssembler
+    # Use a pandas UDF grouped by region to compute correlations
+    from pyspark.sql.types import StructType as ST, StructField as SF
+    import pandas as pd
 
-    # Group by region and compute correlation
-    regions = joined.select("region_id").distinct().collect()
-    results = []
+    result_schema = ST([
+        SF("region_id", StringType()),
+        SF("pearson_total_dc", DoubleType()),
+        SF("pearson_ai_dc", DoubleType()),
+        SF("data_points", IntegerType()),
+        SF("analysis_date", DateType()),
+    ])
 
-    for row in regions:
-        region = row["region_id"]
-        region_data = joined.filter(F.col("region_id") == region)
+    @F.pandas_udf(result_schema, F.PandasUDFType.GROUPED_MAP)
+    def compute_region_corr(pdf):
+        region = pdf["region_id"].iloc[0]
+        n = len(pdf)
+        if n < 6:
+            return pd.DataFrame()
 
-        n_points = region_data.count()
-        if n_points < 6:  # Need minimum data points
-            continue
+        pearson_total = pdf["avg_demand_mw"].corr(pdf["cumulative_capacity_mw"])
+        pearson_ai = pdf["avg_demand_mw"].corr(pdf["cumulative_ai_capacity_mw"])
 
-        # Use Spark's corr function for Pearson
-        pearson = region_data.stat.corr(
-            "avg_demand_mw", "cumulative_capacity_mw"
-        )
-
-        # For AI-specific capacity
-        pearson_ai = region_data.stat.corr(
-            "avg_demand_mw", "cumulative_ai_capacity_mw"
-        )
-
-        results.append({
+        return pd.DataFrame([{
             "region_id": region,
-            "pearson_total_dc": pearson,
-            "pearson_ai_dc": pearson_ai,
-            "data_points": n_points,
+            "pearson_total_dc": float(pearson_total) if pd.notna(pearson_total) else None,
+            "pearson_ai_dc": float(pearson_ai) if pd.notna(pearson_ai) else None,
+            "data_points": n,
             "analysis_date": datetime.now().date(),
-        })
+        }])
 
-    if not results:
-        schema = StructType([
-            StructField("region_id", StringType()),
-            StructField("pearson_total_dc", DoubleType()),
-            StructField("pearson_ai_dc", DoubleType()),
-            StructField("data_points", IntegerType()),
-            StructField("analysis_date", DateType()),
-        ])
-        return joined.sparkSession.createDataFrame([], schema)
+    result = joined.groupby("region_id").apply(compute_region_corr)
 
-    return joined.sparkSession.createDataFrame(results)
+    output.write_dataframe(result)

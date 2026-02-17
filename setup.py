@@ -17,4 +17,9 @@ setup(
         "pytz>=2022.7",
         "pyyaml>=6.0",
     ],
+    entry_points={
+        "transforms.pipelines": [
+            "ai_dc_energy = ai_dc_energy.pipeline",
+        ],
+    },
 )

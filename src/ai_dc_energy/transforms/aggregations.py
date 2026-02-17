@@ -10,25 +10,17 @@ from pyspark.sql import DataFrame
 from pyspark.sql import functions as F
 from pyspark.sql.window import Window
 
-# -----------------------------------------------------------------------
-# Foundry transform imports (uncomment in Foundry):
-# from transforms.api import transform, Input, Output
-# -----------------------------------------------------------------------
+from transforms.api import transform, Input, Output
 
 
-# @transform(
-#     energy=Input("/datasets/enriched/energy_weather_joined"),
-#     dc_timeline=Input("/datasets/enriched/regional_dc_capacity_timeline"),
-#     correlations=Input("/datasets/analytics/correlation_events"),
-#     retail=Input("/datasets/raw/eia_retail_sales"),
-#     output=Output("/datasets/dashboard/kpi_summary"),
-# )
-def compute_dashboard_kpis(
-    energy: DataFrame,
-    dc_timeline: DataFrame,
-    correlations: DataFrame,
-    retail: DataFrame,
-) -> DataFrame:
+@transform(
+    energy=Input("/datasets/enriched/energy_weather_joined"),
+    dc_timeline=Input("/datasets/enriched/regional_dc_capacity_timeline"),
+    correlations=Input("/datasets/analytics/correlation_events"),
+    retail=Input("/datasets/raw/eia_retail_sales"),
+    output=Output("/datasets/dashboard/kpi_summary"),
+)
+def compute_dashboard_kpis(energy, dc_timeline, correlations, retail, output):
     """
     Compute all dashboard KPIs for the executive summary view.
 
@@ -50,22 +42,23 @@ def compute_dashboard_kpis(
     Returns:
         Summary KPI DataFrame for dashboard consumption
     """
-    # KPI 1: Regional Energy Delta — latest month vs baseline
-    latest_month = energy.agg(F.max("timestamp")).collect()[0][0]
+    energy_df = energy.dataframe()
+    dc_timeline_df = dc_timeline.dataframe()
+    correlations_df = correlations.dataframe()
 
-    if latest_month:
-        current_demand = energy.filter(
-            F.date_trunc("month", F.col("timestamp")) == F.date_trunc("month", F.lit(latest_month))
-        ).groupBy("region_id").agg(
-            F.avg("demand_mw").alias("current_avg_demand_mw"),
-        )
-    else:
-        current_demand = energy.groupBy("region_id").agg(
-            F.avg("demand_mw").alias("current_avg_demand_mw"),
-        )
+    # KPI 1: Regional Energy Delta — latest month vs baseline
+    # Compute latest month without collect() using a self-join approach
+    latest_month_df = energy_df.agg(F.max("timestamp").alias("latest_ts"))
+    energy_with_latest = energy_df.crossJoin(F.broadcast(latest_month_df))
+
+    current_demand = energy_with_latest.filter(
+        F.date_trunc("month", F.col("timestamp")) == F.date_trunc("month", F.col("latest_ts"))
+    ).groupBy("region_id").agg(
+        F.avg("demand_mw").alias("current_avg_demand_mw"),
+    )
 
     # Get baseline from correlation events (pre-period averages)
-    baseline_demand = correlations.groupBy("region_id").agg(
+    baseline_demand = correlations_df.groupBy("region_id").agg(
         F.avg("pre_period_avg_demand_mw").alias("baseline_avg_demand_mw"),
         F.avg("delta_demand_pct").alias("avg_delta_pct"),
         F.avg("confidence_score").alias("avg_confidence"),
@@ -86,7 +79,7 @@ def compute_dashboard_kpis(
     )
 
     # KPI 2: Add DC capacity data
-    latest_dc = dc_timeline.groupBy("region_id").agg(
+    latest_dc = dc_timeline_df.groupBy("region_id").agg(
         F.max("cumulative_capacity_mw").alias("total_dc_capacity_mw"),
         F.max("cumulative_ai_capacity_mw").alias("total_ai_dc_capacity_mw"),
         F.max("cumulative_dc_count").alias("total_dc_count"),
@@ -109,7 +102,7 @@ def compute_dashboard_kpis(
     # Add snapshot timestamp
     kpi = kpi.withColumn("snapshot_timestamp", F.current_timestamp())
 
-    return kpi.select(
+    output.write_dataframe(kpi.select(
         "region_id",
         "current_avg_demand_mw",
         "baseline_avg_demand_mw",
@@ -122,14 +115,14 @@ def compute_dashboard_kpis(
         "avg_confidence",
         "dc_events_count",
         "snapshot_timestamp",
-    )
+    ))
 
 
-# @transform(
-#     energy=Input("/datasets/enriched/energy_weather_joined"),
-#     output=Output("/datasets/dashboard/demand_timeseries"),
-# )
-def compute_demand_timeseries(energy: DataFrame) -> DataFrame:
+@transform(
+    energy=Input("/datasets/enriched/energy_weather_joined"),
+    output=Output("/datasets/dashboard/demand_timeseries"),
+)
+def compute_demand_timeseries(energy, output):
     """
     Produce time-series data for Quiver visualization.
 
@@ -137,11 +130,14 @@ def compute_demand_timeseries(energy: DataFrame) -> DataFrame:
     real-time charting in Foundry Quiver.
 
     Args:
-        energy: Weather-adjusted energy readings
+        energy: Foundry input (weather-adjusted energy readings)
+        output: Foundry output dataset handle
 
     Returns:
         Time-series DataFrame with rolling averages
     """
+    energy_df = energy.dataframe()
+
     # 7-day rolling average for trend line
     window_7d = (
         Window
@@ -158,7 +154,7 @@ def compute_demand_timeseries(energy: DataFrame) -> DataFrame:
         .rangeBetween(-30 * 24 * 3600, 0)
     )
 
-    ts = energy.select(
+    ts = energy_df.select(
         "region_id",
         "timestamp",
         "demand_mw",
@@ -174,4 +170,4 @@ def compute_demand_timeseries(energy: DataFrame) -> DataFrame:
         F.col("demand_mw") - F.col("demand_30d_avg_mw")
     )
 
-    return ts
+    output.write_dataframe(ts)

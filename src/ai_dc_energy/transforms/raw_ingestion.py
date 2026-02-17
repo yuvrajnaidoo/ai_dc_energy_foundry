@@ -21,13 +21,8 @@ from pyspark.sql.types import (
     LongType, BooleanType, DateType, IntegerType,
 )
 
-# -----------------------------------------------------------------------
-# Foundry transform imports (available in Foundry runtime)
-# Uncomment these when deploying to Foundry:
-#
-# from transforms.api import transform, Input, Output, configure
-# from transforms.api import lightweight, incremental
-# -----------------------------------------------------------------------
+from transforms.api import transform, Input, Output, configure
+from transforms.api import lightweight, incremental
 
 
 # =============================================================================
@@ -88,13 +83,12 @@ EIA_RETAIL_SALES_SCHEMA = StructType([
 # TRANSFORM: Ingest EIA RTO Demand (Hourly)
 # =============================================================================
 
-# In Foundry, this would be decorated with:
-# @transform(
-#     eia_secret=Input("/path/to/eia_api_key_secret"),
-#     output=Output("/datasets/raw/eia_rto_demand"),
-# )
-# @incremental()
-def ingest_eia_rto_demand(spark, eia_api_key: str, balancing_authorities: list):
+@transform(
+    eia_secret=Input("/datasets/secrets/eia_api_key"),
+    output=Output("/datasets/raw/eia_rto_demand"),
+)
+@incremental()
+def ingest_eia_rto_demand(eia_secret, output):
     """
     Ingest hourly RTO demand data from EIA API v2.
 
@@ -104,17 +98,22 @@ def ingest_eia_rto_demand(spark, eia_api_key: str, balancing_authorities: list):
     Schedule: Every 1 hour (aligned with EIA data publication)
 
     Args:
-        spark: SparkSession (provided by Foundry)
-        eia_api_key: EIA API key from Foundry secrets
-        balancing_authorities: List of BA codes to ingest
+        eia_secret: Foundry secret dataset containing the EIA API key
+        output: Foundry output dataset handle
 
     Returns:
         DataFrame with hourly demand readings
     """
     from ai_dc_energy.connectors.eia_connector import EIAConnector
+    from ai_dc_energy.utils.constants import DC_MARKET_TO_BA
     from datetime import datetime, timedelta
 
+    spark = output.dataframe().sparkSession
+    eia_api_key = eia_secret.read_pandas().iloc[0, 0]
     connector = EIAConnector(api_key=eia_api_key)
+
+    # Derive balancing authorities from configured DC markets
+    balancing_authorities = list({ba for bas in DC_MARKET_TO_BA.values() for ba in bas})
 
     # Fetch last 48 hours (overlap for deduplication safety)
     end_dt = datetime.utcnow()
@@ -128,7 +127,8 @@ def ingest_eia_rto_demand(spark, eia_api_key: str, balancing_authorities: list):
     )
 
     if not records:
-        return spark.createDataFrame([], EIA_RTO_RAW_SCHEMA)
+        output.write_dataframe(spark.createDataFrame([], EIA_RTO_RAW_SCHEMA))
+        return
 
     # Add ingestion timestamp
     ingestion_ts = datetime.utcnow()
@@ -146,17 +146,17 @@ def ingest_eia_rto_demand(spark, eia_api_key: str, balancing_authorities: list):
     # Deduplicate on period + respondent (keep latest ingestion)
     df = df.dropDuplicates(["period", "respondent", "type"])
 
-    return df
+    output.write_dataframe(df)
 
 
 # =============================================================================
 # TRANSFORM: Ingest Epoch AI Data Centers
 # =============================================================================
 
-# @transform(
-#     output=Output("/datasets/raw/epoch_ai_data_centers"),
-# )
-def ingest_epoch_ai_data_centers(spark):
+@transform(
+    output=Output("/datasets/raw/epoch_ai_data_centers"),
+)
+def ingest_epoch_ai_data_centers(output):
     """
     Ingest AI data center records from Epoch AI database.
 
@@ -166,25 +166,27 @@ def ingest_epoch_ai_data_centers(spark):
     Schedule: Daily (data centers don't change that frequently)
 
     Args:
-        spark: SparkSession
+        output: Foundry output dataset handle
 
     Returns:
         DataFrame with normalized data center records
     """
     from ai_dc_energy.connectors.epoch_ai_connector import EpochAIConnector
 
+    spark = output.dataframe().sparkSession
     connector = EpochAIConnector()
 
     try:
         raw_records = connector.fetch_all_data_centers()
     except Exception as e:
-        # If API fails, return empty — Foundry health checks will flag this
         import logging
         logging.getLogger(__name__).error(f"Epoch AI ingestion failed: {e}")
-        return spark.createDataFrame([], DATA_CENTER_RAW_SCHEMA)
+        output.write_dataframe(spark.createDataFrame([], DATA_CENTER_RAW_SCHEMA))
+        return
 
     if not raw_records:
-        return spark.createDataFrame([], DATA_CENTER_RAW_SCHEMA)
+        output.write_dataframe(spark.createDataFrame([], DATA_CENTER_RAW_SCHEMA))
+        return
 
     # Normalize all records
     normalized = [EpochAIConnector.normalize_record(r) for r in raw_records]
@@ -197,19 +199,19 @@ def ingest_epoch_ai_data_centers(spark):
     df = df.withColumn("_rank", F.row_number().over(window))
     df = df.filter(F.col("_rank") == 1).drop("_rank")
 
-    return df
+    output.write_dataframe(df)
 
 
 # =============================================================================
 # TRANSFORM: Ingest EIA Retail Sales (Monthly)
 # =============================================================================
 
-# @transform(
-#     eia_secret=Input("/path/to/eia_api_key_secret"),
-#     output=Output("/datasets/raw/eia_retail_sales"),
-# )
-# @incremental()
-def ingest_eia_retail_sales(spark, eia_api_key: str, states: list):
+@transform(
+    eia_secret=Input("/datasets/secrets/eia_api_key"),
+    output=Output("/datasets/raw/eia_retail_sales"),
+)
+@incremental()
+def ingest_eia_retail_sales(eia_secret, output):
     """
     Ingest monthly retail electricity sales by state.
 
@@ -219,17 +221,20 @@ def ingest_eia_retail_sales(spark, eia_api_key: str, states: list):
     Schedule: Monthly (data published ~2 months after reporting period)
 
     Args:
-        spark: SparkSession
-        eia_api_key: EIA API key
-        states: State codes to ingest (e.g., ['VA', 'TX', 'GA'])
+        eia_secret: Foundry secret dataset containing the EIA API key
+        output: Foundry output dataset handle
 
     Returns:
         DataFrame with monthly retail sales by state and sector
     """
     from ai_dc_energy.connectors.eia_connector import EIAConnector
+    from ai_dc_energy.utils.constants import TOP_DC_STATES
     from datetime import datetime
 
+    spark = output.dataframe().sparkSession
+    eia_api_key = eia_secret.read_pandas().iloc[0, 0]
     connector = EIAConnector(api_key=eia_api_key)
+    states = list(TOP_DC_STATES.keys())
 
     records = connector.get_retail_sales(
         states=states,
@@ -239,7 +244,8 @@ def ingest_eia_retail_sales(spark, eia_api_key: str, states: list):
     )
 
     if not records:
-        return spark.createDataFrame([], EIA_RETAIL_SALES_SCHEMA)
+        output.write_dataframe(spark.createDataFrame([], EIA_RETAIL_SALES_SCHEMA))
+        return
 
     ingestion_ts = datetime.utcnow()
     for record in records:
@@ -254,18 +260,18 @@ def ingest_eia_retail_sales(spark, eia_api_key: str, states: list):
     df = spark.createDataFrame(records, schema=EIA_RETAIL_SALES_SCHEMA)
     df = df.dropDuplicates(["period", "stateid", "sectorid"])
 
-    return df
+    output.write_dataframe(df)
 
 
 # =============================================================================
 # TRANSFORM: Ingest Historical Baseline (DOE/Berkeley Lab)
 # =============================================================================
 
-# @transform(
-#     raw_file=Input("/datasets/uploaded/doe_berkeley_lab_2024_report"),
-#     output=Output("/datasets/raw/historical_dc_energy_baseline"),
-# )
-def ingest_historical_baseline(spark, raw_file_path: str):
+@transform(
+    raw_file=Input("/datasets/uploaded/doe_berkeley_lab_2024_report"),
+    output=Output("/datasets/raw/historical_dc_energy_baseline"),
+)
+def ingest_historical_baseline(raw_file, output):
     """
     Ingest historical U.S. data center energy consumption from
     DOE/Berkeley Lab reports (2014-2028 projections).
@@ -282,8 +288,8 @@ def ingest_historical_baseline(spark, raw_file_path: str):
     - 2025-2028: 200-400+ TWh (projected range)
 
     Args:
-        spark: SparkSession
-        raw_file_path: Path to uploaded DOE/Berkeley report data
+        raw_file: Foundry input dataset (uploaded DOE/Berkeley report)
+        output: Foundry output dataset handle
 
     Returns:
         DataFrame with annual U.S. DC energy consumption by type
@@ -313,4 +319,5 @@ def ingest_historical_baseline(spark, raw_file_path: str):
         (2024, "all", 183.0, 4.0, False, "IEA 2025"),
     ]
 
-    return spark.createDataFrame(baseline_data, schema=schema)
+    spark = output.dataframe().sparkSession
+    output.write_dataframe(spark.createDataFrame(baseline_data, schema=schema))

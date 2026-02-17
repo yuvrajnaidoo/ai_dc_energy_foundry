@@ -25,29 +25,20 @@ from ai_dc_energy.utils.constants import (
     DC_MARKET_TO_BA,
 )
 
-# -----------------------------------------------------------------------
-# Foundry streaming imports (uncomment in Foundry):
-#
-# from transforms.api import transform, Input, Output
-# from transforms.api import configure
-# from transforms.verbs.dataframes import union_all
-# -----------------------------------------------------------------------
+from transforms.api import transform, Input, Output
+from transforms.api import configure
 
 
 # =============================================================================
 # STREAMING TRANSFORM: Live EIA RTO Demand
 # =============================================================================
 
-# In Foundry Pipeline Builder, configure this as a Streaming Pipeline:
-# Input: Streaming sync from EIA API (configured in Data Connection)
-# Output: Streaming dataset published to Ontology
-
-# @transform(
-#     eia_stream=Input("/datasets/streaming/eia_rto_live"),
-#     output=Output("/datasets/streaming/energy_demand_live"),
-# )
-# @configure(profile=["STREAMING"])
-def process_live_energy_demand(eia_stream: DataFrame) -> DataFrame:
+@transform(
+    eia_stream=Input("/datasets/streaming/eia_rto_live"),
+    output=Output("/datasets/streaming/energy_demand_live"),
+)
+@configure(profile=["STREAMING"])
+def process_live_energy_demand(eia_stream, output):
     """
     Process live EIA RTO demand data with streaming semantics.
 
@@ -64,15 +55,17 @@ def process_live_energy_demand(eia_stream: DataFrame) -> DataFrame:
     topic. This transform reads from that topic continuously.
 
     Args:
-        eia_stream: Streaming DataFrame from EIA data connection
+        eia_stream: Foundry streaming input from EIA data connection
+        output: Foundry streaming output dataset handle
 
     Returns:
         Processed streaming DataFrame with anomaly flags
     """
     config = CorrelationConfig
+    eia_stream_df = eia_stream.dataframe()
 
     # Parse and validate
-    processed = eia_stream.withColumn(
+    processed = eia_stream_df.withColumn(
         "timestamp",
         F.to_timestamp(F.col("period"), "yyyy-MM-dd'T'HH")
     ).withColumn(
@@ -97,7 +90,7 @@ def process_live_energy_demand(eia_stream: DataFrame) -> DataFrame:
     )
 
     # Select output columns
-    return processed.select(
+    output.write_dataframe(processed.select(
         F.concat_ws("_", F.lit("live"), F.col("region_id"),
                      F.date_format(F.col("timestamp"), "yyyyMMddHH")).alias("reading_id"),
         "region_id",
@@ -106,23 +99,20 @@ def process_live_energy_demand(eia_stream: DataFrame) -> DataFrame:
         "demand_mw",
         "processing_timestamp",
         "latency_seconds",
-    )
+    ))
 
 
 # =============================================================================
 # STREAMING TRANSFORM: Anomaly Detection
 # =============================================================================
 
-# @transform(
-#     live_demand=Input("/datasets/streaming/energy_demand_live"),
-#     baseline=Input("/datasets/enriched/energy_readings_monthly"),
-#     output=Output("/datasets/streaming/demand_anomalies"),
-# )
-# @configure(profile=["STREAMING"])
-def detect_demand_anomalies(
-    live_demand: DataFrame,
-    baseline: DataFrame,
-) -> DataFrame:
+@transform(
+    live_demand=Input("/datasets/streaming/energy_demand_live"),
+    baseline=Input("/datasets/enriched/energy_readings_monthly"),
+    output=Output("/datasets/streaming/demand_anomalies"),
+)
+@configure(profile=["STREAMING"])
+def detect_demand_anomalies(live_demand, baseline, output):
     """
     Real-time anomaly detection on energy demand.
 
@@ -136,16 +126,19 @@ def detect_demand_anomalies(
     baseline is a batch lookup table.
 
     Args:
-        live_demand: Streaming demand readings
-        baseline: Historical monthly averages per region (batch)
+        live_demand: Foundry streaming input (demand readings)
+        baseline: Foundry input (historical monthly averages, batch)
+        output: Foundry streaming output dataset handle
 
     Returns:
         Anomaly records with severity and context
     """
     config = CorrelationConfig
+    live_demand_df = live_demand.dataframe()
+    baseline_df = baseline.dataframe()
 
     # Compute current month baseline from batch data
-    current_month_baseline = baseline.withColumn(
+    current_month_baseline = baseline_df.withColumn(
         "baseline_month",
         F.month(F.col("month"))
     ).withColumn(
@@ -158,7 +151,7 @@ def detect_demand_anomalies(
     )
 
     # Enrich live stream with month for join
-    live_with_month = live_demand.withColumn(
+    live_with_month = live_demand_df.withColumn(
         "current_month",
         F.month(F.col("timestamp"))
     )
@@ -196,7 +189,7 @@ def detect_demand_anomalies(
         .otherwise("DEMAND_DROP")
     )
 
-    return anomalies.select(
+    output.write_dataframe(anomalies.select(
         live_with_month["region_id"],
         "timestamp",
         "demand_mw",
@@ -205,19 +198,19 @@ def detect_demand_anomalies(
         "severity",
         "anomaly_type",
         "processing_timestamp",
-    )
+    ))
 
 
 # =============================================================================
 # STREAMING TRANSFORM: PJM Real-Time LMP Monitor
 # =============================================================================
 
-# @transform(
-#     pjm_stream=Input("/datasets/streaming/pjm_lmp_live"),
-#     output=Output("/datasets/streaming/energy_pricing_live"),
-# )
-# @configure(profile=["STREAMING"])
-def process_live_pricing(pjm_stream: DataFrame) -> DataFrame:
+@transform(
+    pjm_stream=Input("/datasets/streaming/pjm_lmp_live"),
+    output=Output("/datasets/streaming/energy_pricing_live"),
+)
+@configure(profile=["STREAMING"])
+def process_live_pricing(pjm_stream, output):
     """
     Process live PJM Locational Marginal Pricing data.
 
@@ -228,12 +221,15 @@ def process_live_pricing(pjm_stream: DataFrame) -> DataFrame:
     3. Flags price spikes above configurable thresholds
 
     Args:
-        pjm_stream: Streaming DataFrame from PJM Data Miner
+        pjm_stream: Foundry streaming input from PJM Data Miner
+        output: Foundry streaming output dataset handle
 
     Returns:
         Processed pricing stream with spike detection
     """
-    processed = pjm_stream.withColumn(
+    pjm_stream_df = pjm_stream.dataframe()
+
+    processed = pjm_stream_df.withColumn(
         "timestamp",
         F.to_timestamp(F.col("datetime_beginning_ept"))
     ).withColumn(
@@ -253,7 +249,7 @@ def process_live_pricing(pjm_stream: DataFrame) -> DataFrame:
         F.when(F.col("total_lmp") > 200, True).otherwise(False)  # >$200/MWh
     )
 
-    return processed.select(
+    output.write_dataframe(processed.select(
         "timestamp",
         F.col("pnode_id"),
         F.col("pnode_name"),
@@ -264,4 +260,4 @@ def process_live_pricing(pjm_stream: DataFrame) -> DataFrame:
         "congestion_alert",
         "price_spike_alert",
         F.current_timestamp().alias("processing_timestamp"),
-    )
+    ))
