@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "palantir-mcp": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "palantir-mcp",
+        "--foundry-api-url",
+        "https://eox.usw-16.palantirfoundry.com"
+      ],
+      "env": {
+        "FOUNDRY_TOKEN": "${FOUNDRY_TOKEN}",
+        "FOUNDRY_HOST": "eox.usw-16.palantirfoundry.com"
+      }
+    }
+  }
+}
