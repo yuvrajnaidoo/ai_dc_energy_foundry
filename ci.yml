@@ -1,0 +1,4 @@
+# Foundry CI Checks Configuration
+build:
+      transforms-python: {}
+      
