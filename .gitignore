@@ -45,3 +45,9 @@ Thumbs.db
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Claude Code local settings (contains tokens)
+.claude/settings.local.json
+
+# Playwright MCP cache
+.playwright-mcp/
