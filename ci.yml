@@ -1,10 +1,1 @@
-<<<<<<< HEAD
-build:
-<<<<<<< HEAD
-      transforms-python: {}
-=======
-  transforms-python: {}
->>>>>>> 653be304df3bad2660bd546308c9f05c1016715e
-=======
 transforms-python: {}
->>>>>>> cc2dea450b5e1e98ca54561fc3bfac3d87cad224
