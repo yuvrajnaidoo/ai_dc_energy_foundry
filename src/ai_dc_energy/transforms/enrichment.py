@@ -177,69 +177,17 @@ def enrich_data_centers_with_regions(raw_dcs, output):
 
 @transform(
     energy=Input("/datasets/enriched/energy_readings_normalized"),
-    weather=Input("/datasets/raw/noaa_weather"),
     output=Output("/datasets/enriched/energy_weather_joined"),
 )
-def join_energy_with_weather(energy, weather, output):
+def pass_energy_readings(energy, output):
     """
-    Join energy readings with NOAA weather data for normalization.
+    Pass-through for energy readings.
 
-    Weather normalization is critical for isolating data center load
-    from seasonal demand variation. Hot summers and cold winters
-    create demand spikes unrelated to DC activity.
-
-    Method:
-    - Join on region + date
-    - Compute weather-adjusted demand using CDD/HDD regression
-    - The residual after weather adjustment = base load + DC load
-
-    Args:
-        energy: Foundry input (normalized energy readings)
-        weather: Foundry input (NOAA daily temperature data)
-        output: Foundry output dataset handle
-
-    Returns:
-        Energy readings enriched with temperature and CDD/HDD
+    Weather normalization will be added when NOAA weather data is
+    available. For now, this passes normalized energy readings through
+    with null temperature/CDD fields preserved.
     """
-    energy_df = energy.dataframe()
-    weather_df = weather.dataframe()
-
-    # Extract date from energy timestamps for daily weather join
-    energy_daily = energy_df.withColumn(
-        "reading_date",
-        F.to_date(F.col("timestamp"))
-    )
-
-    # Weather should have: station_id, date, avg_temp, cdd, hdd
-    # Join on region and date (assuming weather has been pre-mapped to regions)
-    try:
-        weather_daily = weather_df.select(
-            F.col("region_id").alias("w_region_id"),
-            F.col("date").alias("w_date"),
-            F.col("avg_temp_f"),
-            F.col("cooling_degree_days").alias("cdd"),
-            F.col("heating_degree_days").alias("hdd"),
-        )
-
-        joined = energy_daily.join(
-            weather_daily,
-            (energy_daily["region_id"] == weather_daily["w_region_id"])
-            & (energy_daily["reading_date"] == weather_daily["w_date"]),
-            how="left",
-        ).drop("w_region_id", "w_date")
-
-        # Update temperature fields
-        joined = joined.withColumn(
-            "temperature_f",
-            F.coalesce(F.col("temperature_f"), F.col("avg_temp_f"))
-        ).withColumn(
-            "cooling_degree_days",
-            F.coalesce(F.col("cooling_degree_days"), F.col("cdd"))
-        ).drop("avg_temp_f", "cdd", "hdd", "reading_date")
-
-        output.write_dataframe(joined)
-    except Exception:
-        output.write_dataframe(energy_daily.drop("reading_date"))
+    output.write_dataframe(energy.dataframe())
 
 
 # =============================================================================

@@ -319,11 +319,11 @@ def _compute_confidence_score(
 # =============================================================================
 
 @transform(
-    energy_monthly=Input("/datasets/enriched/energy_readings_monthly"),
+    energy_readings=Input("/datasets/enriched/energy_weather_joined"),
     dc_timeline=Input("/datasets/enriched/regional_dc_capacity_timeline"),
     output=Output("/datasets/analytics/regional_correlations"),
 )
-def compute_regional_correlations(energy_monthly, dc_timeline, output):
+def compute_regional_correlations(energy_readings, dc_timeline, output):
     """
     Compute Pearson correlation coefficients between cumulative DC
     capacity and regional energy demand over time.
@@ -339,8 +339,15 @@ def compute_regional_correlations(energy_monthly, dc_timeline, output):
     Returns:
         DataFrame with correlation coefficients per region
     """
-    energy_monthly_df = energy_monthly.dataframe()
+    energy_df = energy_readings.dataframe()
     dc_timeline_df = dc_timeline.dataframe()
+
+    # Aggregate hourly readings to monthly averages
+    energy_monthly_df = energy_df.withColumn(
+        "month", F.date_trunc("month", F.col("timestamp"))
+    ).groupBy("region_id", "month").agg(
+        F.avg("demand_mw").alias("avg_demand_mw"),
+    )
 
     # Join energy demand with DC capacity timeline
     joined = energy_monthly_df.join(

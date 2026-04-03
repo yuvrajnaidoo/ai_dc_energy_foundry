@@ -10,4 +10,5 @@ from ai_dc_energy.transforms import raw_ingestion
 from ai_dc_energy.transforms import enrichment
 from ai_dc_energy.transforms import correlation_engine
 from ai_dc_energy.transforms import aggregations
-from ai_dc_energy.streaming import realtime_energy
+# Streaming disabled — requires Foundry Streaming to be enabled
+# from ai_dc_energy.streaming import realtime_energy
