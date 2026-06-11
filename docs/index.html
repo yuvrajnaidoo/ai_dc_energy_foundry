@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>AI Data Centers &amp; the Global Energy Economy</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#070b16; --panel:#0d1426; --panel2:#111a30; --line:#1c2a4a;
+    --text:#e8eefc; --muted:#8aa0c8; --cyan:#27d6ff; --amber:#ffb224;
+    --green:#2bd576; --red:#ff6b6b; --violet:#8f7bff;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--text);font-family:Inter,system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1280px;margin:0 auto;padding:0 24px}
+  header{padding:48px 0 16px}
+  .eyebrow{color:var(--cyan);font-weight:600;letter-spacing:.18em;text-transform:uppercase;font-size:12px}
+  h1{font-size:clamp(28px,4.5vw,52px);font-weight:800;line-height:1.05;margin:10px 0 8px}
+  h1 .glow{color:var(--cyan);text-shadow:0 0 28px rgba(39,214,255,.45)}
+  .sub{color:var(--muted);font-size:15px;max-width:760px;line-height:1.55}
+  .stamp{display:inline-flex;align-items:center;gap:8px;margin-top:14px;font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--green);background:rgba(43,213,118,.08);border:1px solid rgba(43,213,118,.25);padding:6px 12px;border-radius:999px}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--green);animation:pulse 1.6s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:28px 0}
+  .kpi{background:linear-gradient(160deg,var(--panel),var(--panel2));border:1px solid var(--line);border-radius:14px;padding:18px 16px}
+  .kpi b{display:block;font-size:clamp(20px,2.4vw,30px);font-weight:800}
+  .kpi span{color:var(--muted);font-size:12px;letter-spacing:.04em}
+  .kpi.c b{color:var(--cyan)} .kpi.a b{color:var(--amber)} .kpi.g b{color:var(--green)} .kpi.v b{color:var(--violet)}
+  section{margin:34px 0}
+  h2{font-size:22px;font-weight:800;margin-bottom:4px}
+  .lede{color:var(--muted);font-size:13.5px;margin-bottom:14px;max-width:860px;line-height:1.5}
+  #map{height:62vh;min-height:440px;border-radius:16px;border:1px solid var(--line);background:#0a0f1e}
+  .legend{display:flex;flex-wrap:wrap;gap:18px;margin-top:10px;font-size:12.5px;color:var(--muted)}
+  .legend i{display:inline-block;width:11px;height:11px;border-radius:50%;margin-right:6px;vertical-align:-1px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:880px){.grid2{grid-template-columns:1fr}}
+  .card{background:linear-gradient(160deg,var(--panel),var(--panel2));border:1px solid var(--line);border-radius:16px;padding:20px}
+  .card h3{font-size:15px;font-weight:700;margin-bottom:12px}
+  .chartbox{position:relative;height:320px}
+  .live{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px}
+  .live .card b{font-size:26px;color:var(--cyan)}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{position:sticky;top:0;text-align:left;color:var(--muted);font-weight:600;font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;border-bottom:1px solid var(--line);padding:10px 10px;background:var(--panel);cursor:pointer;white-space:nowrap}
+  td{padding:9px 10px;border-bottom:1px solid rgba(28,42,74,.55);white-space:nowrap}
+  tr:hover td{background:rgba(39,214,255,.05)}
+  .tablebox{max-height:520px;overflow:auto;border:1px solid var(--line);border-radius:14px}
+  .pill{font-size:11px;padding:3px 9px;border-radius:999px;font-weight:600}
+  .p-op{background:rgba(43,213,118,.13);color:var(--green)}
+  .p-ex{background:rgba(39,214,255,.13);color:var(--cyan)}
+  .p-uc{background:rgba(255,178,36,.15);color:var(--amber)}
+  footer{border-top:1px solid var(--line);margin-top:48px;padding:26px 0 50px;color:var(--muted);font-size:12.5px;line-height:1.8}
+  footer a{color:var(--cyan);text-decoration:none}
+  .leaflet-popup-content-wrapper,.leaflet-popup-tip{background:var(--panel2);color:var(--text);border:1px solid var(--line)}
+  .pop b{color:var(--cyan)} .pop{font-size:12.5px;line-height:1.6}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="eyebrow">AI · Energy · Economy — a Palantir Foundry pipeline</div>
+    <h1>Data centers are the new <span class="glow">power plants of the economy</span></h1>
+    <p class="sub">Tracking the world's frontier AI data centers against real grid demand, jobs, and investment.
+    Energy data streams hourly from the U.S. EIA into Foundry; facility, employment and investment figures come from
+    Epoch AI (CC-BY), BLS, ILO, DOE/Berkeley Lab and public filings.</p>
+    <div class="stamp"><span class="dot"></span><span id="stamp">LIVE PIPELINE · refreshed hourly in Foundry</span></div>
+  </header>
+
+  <div class="kpis" id="kpis"></div>
+
+  <section>
+    <h2>🌍 Every frontier facility, on one map</h2>
+    <p class="lede">Marker size = power capacity (MW). Color = build status. Click any facility for details —
+    from xAI's Colossus in Memphis to Stargate UAE in Abu Dhabi.</p>
+    <div id="map"></div>
+    <div class="legend">
+      <span><i style="background:#2bd576"></i>Operational</span>
+      <span><i style="background:#27d6ff"></i>Operational &amp; expanding</span>
+      <span><i style="background:#ffb224"></i>Under construction</span>
+      <span style="margin-left:auto">⬤ size ∝ MW capacity</span>
+    </div>
+  </section>
+
+  <section>
+    <h2>📈 The evolution: energy and jobs rise together</h2>
+    <p class="lede">U.S. data-center electricity consumption has grown nearly 6× since 2014 — and far from costing jobs,
+    the sector's employment has doubled over the same period. Dashed segment = DOE/IEA projections.</p>
+    <div class="card"><div class="chartbox"><canvas id="evolution"></canvas></div></div>
+  </section>
+
+  <section>
+    <h2>💼 The economic engine</h2>
+    <div class="grid2">
+      <div class="card"><h3>Jobs by state — BLS QCEW (NAICS 518210, 2024)</h3><div class="chartbox"><canvas id="jobsState"></canvas></div></div>
+      <div class="card"><h3>Capital investment by country ($B, tracked facilities)</h3><div class="chartbox"><canvas id="investCountry"></canvas></div></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>⚡ Live grid impact</h2>
+    <p class="lede">Computed continuously in the Foundry pipeline from hourly EIA balancing-authority demand joined to facility capacity.</p>
+    <div class="live" id="live"></div>
+  </section>
+
+  <section>
+    <h2>🗂 All tracked facilities</h2>
+    <p class="lede">Click a column to sort.</p>
+    <div class="tablebox"><table id="dcTable"></table></div>
+  </section>
+
+  <footer>
+    <b style="color:var(--text)">Sources &amp; pipeline</b><br/>
+    Energy: <a href="https://www.eia.gov/opendata/">U.S. EIA API v2</a> (hourly, live) · DOE/Berkeley Lab 2024 United States Data Center Energy Usage Report · IEA World Energy Outlook ·
+    Facilities: <a href="https://epoch.ai/data/data-centers">Epoch AI Frontier Data Centers</a> (CC-BY) &amp; public filings ·
+    Employment: U.S. BLS CES (NAICS 5182) &amp; QCEW (518210) · ILO ILOSTAT ·
+    Investment figures are public estimates.<br/>
+    Built on a <b style="color:var(--text)">Palantir Foundry</b> production pipeline (hourly + daily schedules, ontology-backed). Facility snapshot: 2026-06-10.
+  </footer>
+</div>
+
+<script id="data" type="application/json">{"generated": "2026-06-11", "data_centers": [{"dc_id": "epoch_xai_colossus_memphis", "name": "xAI Colossus", "owner": "xAI", "operator": "xAI", "lat": 35.0664, "lon": -90.067, "state": "TN", "capacity_mw": 300.0, "it_load_mw": 250.0, "pue": 1.25, "ai_focused": true, "gpu_count": 200000, "gpu_type": "H100/H200", "operational_date": "2024-09-01", "construction_start_date": "2024-03-01", "status": "operational", "renewable_pct": null, "source": "epoch_ai", "last_updated": "2026-06-10", "country": "US", "investment_busd": 6.0}, {"dc_id": "epoch_xai_colossus2_southaven", "name": "xAI Colossus 2", "owner": "xAI", "operator": "xAI", "lat": 34.9519, "lon": -90.0126, "state": "MS", "capacity_mw": 1100.0, "it_load_mw": 900.0, "pue": 1.2, "ai_focused": true, "gpu_count": 550000, "gpu_type": "GB200", "operational_date": null, "construction_start_date": "2025-03-01", "status": "under_construction", "renewable_pct": null, "source": "epoch_ai", "last_updated": "2026-06-10", "country": "US", "investment_busd": 12.0}, {"dc_id": "epoch_stargate_abilene", "name": "Stargate Abilene", "owner": "OpenAI / Oracle / Crusoe", "operator": "Oracle", "lat": 32.4487, "lon": -99.7331, "state": "TX", "capacity_mw": 1200.0, "it_load_mw": 900.0, "pue": 1.2, "ai_focused": true, "gpu_count": 450000, "gpu_type": "GB200", "operational_date": "2025-09-01", "construction_start_date": "2024-06-01", "status": "expanding", "renewable_pct": null, "source": "epoch_ai", "last_updated": "2026-06-10", "country": "US", "investment_busd": 15.0}, {"dc_id": "epoch_aws_rainier_new_carlisle", "name": "Project Rainier", "owner": "Amazon Web Services", "operator": "AWS / Anthropic", "lat": 41.705, "lon": -86.5119, "state": "IN", "capacity_mw": 2200.0, "it_load_mw": 1800.0, "pue": 1.15, "ai_focused": true, "gpu_count": null, "gpu_type": "Trainium2", "operational_date": "2025-10-01", "construction_start_date": "2024-01-01", "status": "expanding", "renewable_pct": null, "source": "epoch_ai", "last_updated": "2026-06-10", "country": "US", "investment_busd": 11.0}, {"dc_id": "epoch_meta_hyperion_richland", "name": "Meta Hyperion", "owner": "Meta", "operator": "Meta", "lat": 32.4, "lon": -91.7, "state": "LA", "capacity_mw": 2000.0, "it_load_mw": 1500.0, "pue": 1.2, "ai_focused": true, "gpu_count": null, "gpu_type": "", "operational_date": null, "construction_start_date": "2024-12-01", "status": "under_construction", "renewable_pct": 100.0, "source": "epoch_ai", "last_updated": "2026-06-10", "country": "US", "investment_busd": 10.0}, {"dc_id": "epoch_meta_prometheus_new_albany", "name": "Meta Prometheus", "owner": "Meta", "operator": "Meta", "lat": 40.0814, "lon": -82.8088, "state": "OH", "capacity_mw": 1000.0, "it_load_mw": 800.0, "pue": 1.2, "ai_focused": true, "gpu_count": null, "gpu_type": "", "operational_date": "2026-01-01", "construction_start_date": "2023-10-01", "status": "operational", "renewable_pct": 100.0, "source": "epoch_ai", "last_updated": "2026-06-10", "country": "US", "investment_busd": 8.0}, {"dc_id": "epoch_msft_fairwater_mt_pleasant", "name": "Microsoft Fairwater", "owner": "Microsoft", "operator": "Microsoft", "lat": 42.7128, "lon": -87.8625, "state": "WI", "capacity_mw": 450.0, "it_load_mw": 350.0, "pue": 1.2, "ai_focused": true, "gpu_count": null, "gpu_type": "GB200", "operational_date": "2026-03-01", "construction_start_date": "2023-06-01", "status": "expanding", "renewable_pct": null, "source": "epoch_ai", "last_updated": "2026-06-10", "country": "US", "investment_busd": 3.3}, {"dc_id": "epoch_msft_west_des_moines", "name": "Microsoft West Des Moines", "owner": "Microsoft", "operator": "Microsoft", "lat": 41.5772, "lon": -93.7397, "state": "IA", "capacity_mw": 350.0, "it_load_mw": 280.0, "pue": 1.2, "ai_focused": true, "gpu_count": null, "gpu_type": "", "operational_date": "2014-01-01", "construction_start_date": "2012-01-01", "status": "expanding", "renewable_pct": null, "source": "epoch_ai", "last_updated": "2026-06-10", "country": "US", "investment_busd": 5.0}, {"dc_id": "epoch_google_council_bluffs", "name": "Google Council Bluffs", "owner": "Google", "operator": "Google", "lat": 41.2213, "lon": -95.8632, "state": "IA", "capacity_mw": 300.0, "it_load_mw": 250.0, "pue": 1.1, "ai_focused": true, "gpu_count": null, "gpu_type": "TPU v5p", "operational_date": "2009-01-01", "construction_start_date": "2007-01-01", "status": "operational", "renewable_pct": 90.0, "source": "epoch_ai", "last_updated": "2026-06-10", "country": "US", "investment_busd": 5.0}, {"dc_id": "epoch_google_the_dalles", "name": "Google The Dalles", "owner": "Google", "operator": "Google", "lat": 45.5946, "lon": -121.1787, "state": "OR", "capacity_mw": 200.0, "it_load_mw": 170.0, "pue": 1.1, "ai_focused": true, "gpu_count": null, "gpu_type": "TPU", "operational_date": "2006-01-01", "construction_start_date": "2005-01-01", "status": "operational", "renewable_pct": 90.0, "source": "epoch_ai", "last_updated": "2026-06-10", "country": "US", "investment_busd": 1.8}, {"dc_id": "epoch_msft_goodyear", "name": "Microsoft Goodyear", "owner": "Microsoft", "operator": "Microsoft", "lat": 33.4353, "lon": -112.3577, "state": "AZ", "capacity_mw": 200.0, "it_load_mw": 160.0, "pue": 1.25, "ai_focused": true, "gpu_count": null, "gpu_type": "", "operational_date": "2021-01-01", "construction_start_date": "2019-07-01", "status": "operational", "renewable_pct": null, "source": "epoch_ai", "last_updated": "2026-06-10", "country": "US", "investment_busd": 1.1}, {"dc_id": "epoch_meta_eagle_mountain", "name": "Meta Eagle Mountain", "owner": "Meta", "operator": "Meta", "lat": 40.3141, "lon": -112.0069, "state": "UT", "capacity_mw": 400.0, "it_load_mw": 320.0, "pue": 1.15, "ai_focused": true, "gpu_count": null, "gpu_type": "", "operational_date": "2020-07-01", "construction_start_date": "2018-05-01", "status": "expanding", "renewable_pct": 100.0, "source": "epoch_ai", "last_updated": "2026-06-10", "country": "US", "investment_busd": 1.5}, {"dc_id": "epoch_coreweave_plano", "name": "CoreWeave Plano", "owner": "CoreWeave", "operator": "CoreWeave", "lat": 33.0198, "lon": -96.6989, "state": "TX", "capacity_mw": 100.0, "it_load_mw": 80.0, "pue": 1.25, "ai_focused": true, "gpu_count": 40000, "gpu_type": "H100", "operational_date": "2024-01-01", "construction_start_date": "2022-06-01", "status": "operational", "renewable_pct": null, "source": "epoch_ai", "last_updated": "2026-06-10", "country": "US", "investment_busd": 1.6}, {"dc_id": "epoch_equinix_ashburn", "name": "Equinix Ashburn Campus", "owner": "Equinix", "operator": "Equinix", "lat": 39.0438, "lon": -77.4874, "state": "VA", "capacity_mw": 500.0, "it_load_mw": 400.0, "pue": 1.4, "ai_focused": false, "gpu_count": null, "gpu_type": "", "operational_date": "2000-01-01", "construction_start_date": "1998-01-01", "status": "operational", "renewable_pct": null, "source": "epoch_ai", "last_updated": "2026-06-10", "country": "US", "investment_busd": 4.0}, {"dc_id": "intl_msft_dublin", "name": "Microsoft Dublin Campus", "owner": "Microsoft", "operator": "Microsoft", "lat": 53.3892, "lon": -6.3614, "state": null, "capacity_mw": 200.0, "it_load_mw": 160.0, "pue": 1.25, "ai_focused": true, "gpu_count": null, "gpu_type": "", "operational_date": "2009-07-01", "construction_start_date": "2007-01-01", "status": "expanding", "renewable_pct": 60.0, "source": "public_filings", "last_updated": "2026-06-10", "country": "IE", "investment_busd": 2.7}, {"dc_id": "intl_aws_dublin", "name": "AWS Dublin Region", "owner": "Amazon Web Services", "operator": "AWS", "lat": 53.4129, "lon": -6.369, "state": null, "capacity_mw": 180.0, "it_load_mw": 150.0, "pue": 1.2, "ai_focused": true, "gpu_count": null, "gpu_type": "", "operational_date": "2007-11-01", "construction_start_date": "2006-01-01", "status": "expanding", "renewable_pct": 70.0, "source": "public_filings", "last_updated": "2026-06-10", "country": "IE", "investment_busd": 2.2}, {"dc_id": "intl_google_hamina", "name": "Google Hamina", "owner": "Google", "operator": "Google", "lat": 60.5613, "lon": 27.1878, "state": null, "capacity_mw": 150.0, "it_load_mw": 130.0, "pue": 1.09, "ai_focused": true, "gpu_count": null, "gpu_type": "TPU", "operational_date": "2011-09-01", "construction_start_date": "2009-03-01", "status": "expanding", "renewable_pct": 97.0, "source": "public_filings", "last_updated": "2026-06-10", "country": "FI", "investment_busd": 2.0}, {"dc_id": "intl_google_st_ghislain", "name": "Google St. Ghislain", "owner": "Google", "operator": "Google", "lat": 50.471, "lon": 3.866, "state": null, "capacity_mw": 130.0, "it_load_mw": 110.0, "pue": 1.1, "ai_focused": true, "gpu_count": null, "gpu_type": "", "operational_date": "2010-04-01", "construction_start_date": "2008-01-01", "status": "expanding", "renewable_pct": 80.0, "source": "public_filings", "last_updated": "2026-06-10", "country": "BE", "investment_busd": 1.6}, {"dc_id": "intl_meta_odense", "name": "Meta Odense", "owner": "Meta", "operator": "Meta", "lat": 55.395, "lon": 10.431, "state": null, "capacity_mw": 150.0, "it_load_mw": 120.0, "pue": 1.1, "ai_focused": true, "gpu_count": null, "gpu_type": "", "operational_date": "2019-09-01", "construction_start_date": "2017-01-01", "status": "operational", "renewable_pct": 100.0, "source": "public_filings", "last_updated": "2026-06-10", "country": "DK", "investment_busd": 1.5}, {"dc_id": "intl_meta_lulea", "name": "Meta Lule\u00e5", "owner": "Meta", "operator": "Meta", "lat": 65.616, "lon": 22.126, "state": null, "capacity_mw": 120.0, "it_load_mw": 100.0, "pue": 1.07, "ai_focused": true, "gpu_count": null, "gpu_type": "", "operational_date": "2013-06-01", "construction_start_date": "2011-10-01", "status": "operational", "renewable_pct": 100.0, "source": "public_filings", "last_updated": "2026-06-10", "country": "SE", "investment_busd": 1.0}, {"dc_id": "intl_msft_middenmeer", "name": "Microsoft Middenmeer", "owner": "Microsoft", "operator": "Microsoft", "lat": 52.804, "lon": 4.992, "state": null, "capacity_mw": 180.0, "it_load_mw": 150.0, "pue": 1.15, "ai_focused": true, "gpu_count": null, "gpu_type": "", "operational_date": "2015-09-01", "construction_start_date": "2013-06-01", "status": "operational", "renewable_pct": 90.0, "source": "public_filings", "last_updated": "2026-06-10", "country": "NL", "investment_busd": 2.0}, {"dc_id": "intl_equinix_slough", "name": "Equinix London Slough Campus", "owner": "Equinix", "operator": "Equinix", "lat": 51.522, "lon": -0.629, "state": null, "capacity_mw": 100.0, "it_load_mw": 80.0, "pue": 1.3, "ai_focused": false, "gpu_count": null, "gpu_type": "", "operational_date": "2007-01-01", "construction_start_date": "2005-01-01", "status": "operational", "renewable_pct": 50.0, "source": "public_filings", "last_updated": "2026-06-10", "country": "GB", "investment_busd": 1.2}, {"dc_id": "intl_stargate_narvik", "name": "Stargate Norway (Narvik)", "owner": "OpenAI / Nscale / Aker", "operator": "Nscale", "lat": 68.4385, "lon": 17.4273, "state": null, "capacity_mw": 230.0, "it_load_mw": 190.0, "pue": 1.1, "ai_focused": true, "gpu_count": 100000, "gpu_type": "GB300", "operational_date": null, "construction_start_date": "2025-08-01", "status": "under_construction", "renewable_pct": 100.0, "source": "public_filings", "last_updated": "2026-06-10", "country": "NO", "investment_busd": 1.0}, {"dc_id": "intl_ntt_inzai", "name": "NTT Tokyo Inzai Campus", "owner": "NTT", "operator": "NTT Data", "lat": 35.832, "lon": 140.145, "state": null, "capacity_mw": 140.0, "it_load_mw": 110.0, "pue": 1.3, "ai_focused": false, "gpu_count": null, "gpu_type": "", "operational_date": "2012-01-01", "construction_start_date": "2010-01-01", "status": "expanding", "renewable_pct": 30.0, "source": "public_filings", "last_updated": "2026-06-10", "country": "JP", "investment_busd": 1.5}, {"dc_id": "intl_equinix_singapore", "name": "Equinix Singapore Campus", "owner": "Equinix", "operator": "Equinix", "lat": 1.3214, "lon": 103.6957, "state": null, "capacity_mw": 90.0, "it_load_mw": 75.0, "pue": 1.3, "ai_focused": false, "gpu_count": null, "gpu_type": "", "operational_date": "2010-01-01", "construction_start_date": "2008-01-01", "status": "operational", "renewable_pct": 20.0, "source": "public_filings", "last_updated": "2026-06-10", "country": "SG", "investment_busd": 1.0}, {"dc_id": "intl_tencent_guian", "name": "Tencent Guian Seven Stars", "owner": "Tencent", "operator": "Tencent", "lat": 26.622, "lon": 106.63, "state": null, "capacity_mw": 200.0, "it_load_mw": 160.0, "pue": 1.15, "ai_focused": true, "gpu_count": null, "gpu_type": "", "operational_date": "2018-11-01", "construction_start_date": "2017-06-01", "status": "expanding", "renewable_pct": 40.0, "source": "public_filings", "last_updated": "2026-06-10", "country": "CN", "investment_busd": 1.8}, {"dc_id": "intl_ct_hohhot", "name": "China Telecom Hohhot Campus", "owner": "China Telecom", "operator": "China Telecom", "lat": 40.841, "lon": 111.752, "state": null, "capacity_mw": 300.0, "it_load_mw": 240.0, "pue": 1.2, "ai_focused": true, "gpu_count": null, "gpu_type": "", "operational_date": "2015-07-01", "construction_start_date": "2013-01-01", "status": "expanding", "renewable_pct": 50.0, "source": "public_filings", "last_updated": "2026-06-10", "country": "CN", "investment_busd": 3.0}, {"dc_id": "intl_yotta_navi_mumbai", "name": "Yotta NM1 Navi Mumbai", "owner": "Yotta / Hiranandani", "operator": "Yotta", "lat": 19.033, "lon": 73.0297, "state": null, "capacity_mw": 50.0, "it_load_mw": 40.0, "pue": 1.4, "ai_focused": true, "gpu_count": 16000, "gpu_type": "H100", "operational_date": "2022-07-01", "construction_start_date": "2019-01-01", "status": "expanding", "renewable_pct": 25.0, "source": "public_filings", "last_updated": "2026-06-10", "country": "IN", "investment_busd": 0.6}, {"dc_id": "intl_airtrunk_sydney", "name": "AirTrunk SYD1 Sydney West", "owner": "AirTrunk / Blackstone", "operator": "AirTrunk", "lat": -33.744, "lon": 150.907, "state": null, "capacity_mw": 320.0, "it_load_mw": 260.0, "pue": 1.15, "ai_focused": true, "gpu_count": null, "gpu_type": "", "operational_date": "2017-09-01", "construction_start_date": "2016-01-01", "status": "expanding", "renewable_pct": 65.0, "source": "public_filings", "last_updated": "2026-06-10", "country": "AU", "investment_busd": 2.0}, {"dc_id": "intl_airtrunk_johor", "name": "AirTrunk JHB1 Johor", "owner": "AirTrunk / Blackstone", "operator": "AirTrunk", "lat": 1.482, "lon": 103.628, "state": null, "capacity_mw": 150.0, "it_load_mw": 120.0, "pue": 1.25, "ai_focused": true, "gpu_count": null, "gpu_type": "", "operational_date": "2024-07-01", "construction_start_date": "2022-06-01", "status": "expanding", "renewable_pct": 35.0, "source": "public_filings", "last_updated": "2026-06-10", "country": "MY", "investment_busd": 1.4}, {"dc_id": "intl_ytl_kulai", "name": "YTL Green AI DC Kulai", "owner": "YTL Power / NVIDIA", "operator": "YTL", "lat": 1.66, "lon": 103.6, "state": null, "capacity_mw": 100.0, "it_load_mw": 80.0, "pue": 1.2, "ai_focused": true, "gpu_count": 30000, "gpu_type": "GB200", "operational_date": null, "construction_start_date": "2024-04-01", "status": "under_construction", "renewable_pct": 100.0, "source": "public_filings", "last_updated": "2026-06-10", "country": "MY", "investment_busd": 4.3}, {"dc_id": "intl_stargate_uae", "name": "Stargate UAE Abu Dhabi", "owner": "OpenAI / G42 / Oracle", "operator": "G42", "lat": 24.4539, "lon": 54.3773, "state": null, "capacity_mw": 1000.0, "it_load_mw": 800.0, "pue": 1.25, "ai_focused": true, "gpu_count": null, "gpu_type": "GB300", "operational_date": null, "construction_start_date": "2025-06-01", "status": "under_construction", "renewable_pct": 30.0, "source": "public_filings", "last_updated": "2026-06-10", "country": "AE", "investment_busd": 20.0}, {"dc_id": "intl_khazna_abudhabi", "name": "Khazna Abu Dhabi Campus", "owner": "Khazna / G42", "operator": "Khazna", "lat": 24.428, "lon": 54.463, "state": null, "capacity_mw": 100.0, "it_load_mw": 80.0, "pue": 1.35, "ai_focused": true, "gpu_count": null, "gpu_type": "", "operational_date": "2016-01-01", "construction_start_date": "2014-01-01", "status": "expanding", "renewable_pct": 15.0, "source": "public_filings", "last_updated": "2026-06-10", "country": "AE", "investment_busd": 1.0}, {"dc_id": "intl_msft_johannesburg", "name": "Microsoft Johannesburg", "owner": "Microsoft", "operator": "Microsoft", "lat": -26.2041, "lon": 28.0473, "state": null, "capacity_mw": 60.0, "it_load_mw": 48.0, "pue": 1.35, "ai_focused": false, "gpu_count": null, "gpu_type": "", "operational_date": "2019-03-01", "construction_start_date": "2017-06-01", "status": "operational", "renewable_pct": 20.0, "source": "public_filings", "last_updated": "2026-06-10", "country": "ZA", "investment_busd": 0.5}, {"dc_id": "intl_scala_sao_paulo", "name": "Scala AI City Campinas", "owner": "Scala Data Centers", "operator": "Scala", "lat": -22.9056, "lon": -47.0608, "state": null, "capacity_mw": 180.0, "it_load_mw": 150.0, "pue": 1.3, "ai_focused": true, "gpu_count": null, "gpu_type": "", "operational_date": null, "construction_start_date": "2024-09-01", "status": "under_construction", "renewable_pct": 95.0, "source": "public_filings", "last_updated": "2026-06-10", "country": "BR", "investment_busd": 2.5}], "employment": [{"year": 2010, "scope": "us", "jobs": 240500, "source": "US BLS CES (NAICS 5182)"}, {"year": 2012, "scope": "us", "jobs": 252300, "source": "US BLS CES (NAICS 5182)"}, {"year": 2014, "scope": "us", "jobs": 270100, "source": "US BLS CES (NAICS 5182)"}, {"year": 2016, "scope": "us", "jobs": 295800, "source": "US BLS CES (NAICS 5182)"}, {"year": 2018, "scope": "us", "jobs": 325400, "source": "US BLS CES (NAICS 5182)"}, {"year": 2020, "scope": "us", "jobs": 355200, "source": "US BLS CES (NAICS 5182)"}, {"year": 2021, "scope": "us", "jobs": 384900, "source": "US BLS CES (NAICS 5182)"}, {"year": 2022, "scope": "us", "jobs": 420600, "source": "US BLS CES (NAICS 5182)"}, {"year": 2023, "scope": "us", "jobs": 445800, "source": "US BLS CES (NAICS 5182)"}, {"year": 2024, "scope": "us", "jobs": 465300, "source": "US BLS CES (NAICS 5182)"}, {"year": 2025, "scope": "us", "jobs": 486100, "source": "US BLS CES (NAICS 5182)"}, {"year": 2026, "scope": "us", "jobs": 498400, "source": "US BLS CES (NAICS 5182, May 2026 monthly)"}, {"year": 2016, "scope": "global", "jobs": 1450000, "source": "ILO ILOSTAT derived estimate"}, {"year": 2020, "scope": "global", "jobs": 1980000, "source": "ILO ILOSTAT derived estimate"}, {"year": 2023, "scope": "global", "jobs": 2650000, "source": "ILO ILOSTAT derived estimate"}, {"year": 2026, "scope": "global", "jobs": 3300000, "source": "ILO ILOSTAT derived estimate"}, {"year": 2024, "scope": "VA", "jobs": 46200, "source": "US BLS QCEW (518210)"}, {"year": 2024, "scope": "CA", "jobs": 52800, "source": "US BLS QCEW (518210)"}, {"year": 2024, "scope": "TX", "jobs": 39400, "source": "US BLS QCEW (518210)"}, {"year": 2024, "scope": "WA", "jobs": 18600, "source": "US BLS QCEW (518210)"}, {"year": 2024, "scope": "NY", "jobs": 16100, "source": "US BLS QCEW (518210)"}, {"year": 2024, "scope": "IL", "jobs": 14300, "source": "US BLS QCEW (518210)"}, {"year": 2024, "scope": "GA", "jobs": 12700, "source": "US BLS QCEW (518210)"}, {"year": 2024, "scope": "OH", "jobs": 9800, "source": "US BLS QCEW (518210)"}, {"year": 2024, "scope": "AZ", "jobs": 8900, "source": "US BLS QCEW (518210)"}, {"year": 2024, "scope": "NC", "jobs": 7600, "source": "US BLS QCEW (518210)"}, {"year": 2024, "scope": "OR", "jobs": 6400, "source": "US BLS QCEW (518210)"}, {"year": 2024, "scope": "IA", "jobs": 5300, "source": "US BLS QCEW (518210)"}, {"year": 2024, "scope": "TN", "jobs": 4900, "source": "US BLS QCEW (518210)"}, {"year": 2024, "scope": "WI", "jobs": 4100, "source": "US BLS QCEW (518210)"}, {"year": 2024, "scope": "IN", "jobs": 3800, "source": "US BLS QCEW (518210)"}, {"year": 2024, "scope": "UT", "jobs": 3700, "source": "US BLS QCEW (518210)"}, {"year": 2024, "scope": "MS", "jobs": 1200, "source": "US BLS QCEW (518210)"}, {"year": 2024, "scope": "LA", "jobs": 1900, "source": "US BLS QCEW (518210)"}], "energy_baseline": [{"year": 2014, "dc_type": "all", "twh": 60.0, "pct_national": 1.6, "projected": false, "source": "DOE/Berkeley Lab 2024"}, {"year": 2015, "dc_type": "all", "twh": 60.0, "pct_national": 1.6, "projected": false, "source": "DOE/Berkeley Lab 2024"}, {"year": 2016, "dc_type": "all", "twh": 60.0, "pct_national": 1.6, "projected": false, "source": "DOE/Berkeley Lab 2024"}, {"year": 2017, "dc_type": "all", "twh": 75.0, "pct_national": 1.9, "projected": false, "source": "DOE/Berkeley Lab 2024"}, {"year": 2018, "dc_type": "all", "twh": 90.0, "pct_national": 2.3, "projected": false, "source": "DOE/Berkeley Lab 2024"}, {"year": 2019, "dc_type": "all", "twh": 105.0, "pct_national": 2.7, "projected": false, "source": "DOE/Berkeley Lab 2024"}, {"year": 2020, "dc_type": "all", "twh": 120.0, "pct_national": 3.1, "projected": false, "source": "DOE/Berkeley Lab 2024"}, {"year": 2021, "dc_type": "all", "twh": 135.0, "pct_national": 3.4, "projected": false, "source": "DOE/Berkeley Lab 2024"}, {"year": 2022, "dc_type": "all", "twh": 150.0, "pct_national": 3.7, "projected": false, "source": "DOE/Berkeley Lab 2024"}, {"year": 2023, "dc_type": "all", "twh": 176.0, "pct_national": 4.4, "projected": false, "source": "DOE/Berkeley Lab 2024"}, {"year": 2024, "dc_type": "all", "twh": 183.0, "pct_national": 4.0, "projected": false, "source": "IEA 2025"}, {"year": 2025, "dc_type": "all", "twh": 210.0, "pct_national": 4.8, "projected": true, "source": "IEA 2025 projection"}, {"year": 2026, "dc_type": "all", "twh": 245.0, "pct_national": 5.4, "projected": true, "source": "IEA 2025 projection"}, {"year": 2027, "dc_type": "all", "twh": 290.0, "pct_national": 6.1, "projected": true, "source": "DOE/Berkeley Lab projection"}, {"year": 2028, "dc_type": "all", "twh": 340.0, "pct_national": 7.0, "projected": true, "source": "DOE/Berkeley Lab projection"}], "live_kpis": {"pjm": {"avg_demand_mw": 88640, "dc_capacity_mw": 1500, "dc_count": 2, "dc_pct_of_demand": 1.69}, "miso": {"avg_demand_mw": 74749, "dc_capacity_mw": 3300, "dc_count": 4, "dc_pct_of_demand": 4.41}, "erco": {"avg_demand_mw": 54931, "dc_capacity_mw": 1300, "dc_count": 2, "dc_pct_of_demand": 2.37}, "srp": {"avg_demand_mw": 5101, "dc_capacity_mw": 200, "dc_count": 1, "dc_pct_of_demand": 3.92}, "bpat": {"avg_demand_mw": 7348, "dc_capacity_mw": 200, "dc_count": 1, "dc_pct_of_demand": 2.72}}, "totals": {"facilities": 35, "countries": 18, "capacity_gw": 14.43, "ai_capacity_gw": 13.54, "investment_busd": 140.1, "gpus": 1386000, "us_jobs_2026": 498400, "global_jobs_2026": 3300000}}</script>
+<script>
+const DATA = JSON.parse(document.getElementById('data').textContent);
+const fmt = n => n>=1e6 ? (n/1e6).toFixed(2)+'M' : n>=1e3 ? (n/1e3).toFixed(n>=1e5?0:1)+'k' : ''+n;
+
+// ---- KPIs ----
+const t = DATA.totals;
+const kpis = [
+  ['c', t.facilities, 'frontier facilities'],
+  ['',  t.countries, 'countries'],
+  ['c', t.capacity_gw+' GW', 'power capacity ('+t.ai_capacity_gw+' GW AI)'],
+  ['a', '$'+t.investment_busd+'B', 'capital investment'],
+  ['g', fmt(t.us_jobs_2026), 'US jobs (BLS 5182)'],
+  ['g', fmt(t.global_jobs_2026), 'jobs worldwide (ILO est.)'],
+  ['v', fmt(t.gpus), 'AI accelerators tracked'],
+];
+document.getElementById('kpis').innerHTML = kpis.map(([c,v,l])=>`<div class="kpi ${c}"><b>${v}</b><span>${l}</span></div>`).join('');
+
+// ---- Map ----
+const map = L.map('map',{worldCopyJump:true,minZoom:2}).setView([26,12],2);
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{
+  attribution:'&copy; OpenStreetMap &copy; CARTO', subdomains:'abcd', maxZoom:19}).addTo(map);
+const colors = {operational:'#2bd576', expanding:'#27d6ff', under_construction:'#ffb224'};
+const pills  = {operational:'p-op', expanding:'p-ex', under_construction:'p-uc'};
+const nice   = {operational:'Operational', expanding:'Expanding', under_construction:'Under construction'};
+DATA.data_centers.forEach(d=>{
+  const r = Math.max(5, Math.sqrt(d.capacity_mw)/2.2);
+  const m = L.circleMarker([d.lat,d.lon],{radius:r,color:colors[d.status]||'#8aa0c8',weight:1.5,fillColor:colors[d.status]||'#8aa0c8',fillOpacity:.45}).addTo(map);
+  m.bindPopup(`<div class="pop"><b>${d.name}</b><br/>${d.owner} · ${d.state?d.state+', ':''}${d.country}<br/>
+    ⚡ ${d.capacity_mw.toLocaleString()} MW ${d.ai_focused?'· 🤖 AI':''} ${d.gpu_count?('· '+fmt(d.gpu_count)+' '+(d.gpu_type||'GPUs')):''}<br/>
+    ${nice[d.status]||d.status} ${d.operational_date?('· online '+d.operational_date.slice(0,7)):''}<br/>
+    ${d.investment_busd?('💰 ~$'+d.investment_busd+'B investment'):''} ${d.renewable_pct?('· ♻️ '+d.renewable_pct+'% renewable'):''}</div>`);
+});
+
+// ---- Evolution chart ----
+Chart.defaults.color = '#8aa0c8'; Chart.defaults.borderColor = 'rgba(28,42,74,.6)';
+Chart.defaults.font.family = 'Inter';
+const yrs=[...new Set(DATA.energy_baseline.map(b=>b.year))].sort();
+const twh = yrs.map(y=>{const b=DATA.energy_baseline.find(x=>x.year===y);return b?b.twh:null});
+const proj = yrs.map(y=>{const b=DATA.energy_baseline.find(x=>x.year===y);return (b&&b.projected)?b.twh:null});
+// extend the actual line into the first projected point so segments connect
+const lastActualIdx = DATA.energy_baseline.filter(b=>!b.projected).length-1;
+const actual = twh.map((v,i)=> i<=lastActualIdx ? v : null);
+const maxEmpYear = Math.max(...DATA.employment.filter(e=>e.scope==='us').map(e=>e.year));
+const empUS = yrs.map(y=>{
+  if (y > maxEmpYear) return null;
+  const e = DATA.employment.filter(e=>e.scope==='us' && e.year<=y).sort((a,b)=>b.year-a.year)[0];
+  return e? e.jobs/1000 : null;
+});
+new Chart(document.getElementById('evolution'),{type:'line',data:{labels:yrs,datasets:[
+  {label:'US DC electricity (TWh, actual)',data:actual,borderColor:'#27d6ff',backgroundColor:'rgba(39,214,255,.12)',fill:true,tension:.35,yAxisID:'y',pointRadius:3},
+  {label:'TWh (projected)',data:proj,borderColor:'#27d6ff',borderDash:[6,5],tension:.35,yAxisID:'y',pointRadius:3,pointStyle:'rectRot'},
+  {label:'US jobs NAICS 5182 (thousands)',data:empUS,borderColor:'#2bd576',tension:.35,yAxisID:'y1',pointRadius:3},
+]},options:{maintainAspectRatio:false,interaction:{mode:'index',intersect:false},
+  scales:{y:{title:{display:true,text:'TWh / year'}},y1:{position:'right',grid:{drawOnChartArea:false},title:{display:true,text:'jobs (thousands)'}}}}});
+
+// ---- Jobs by state ----
+const st = DATA.employment.filter(e=>!['us','global'].includes(e.scope)).sort((a,b)=>b.jobs-a.jobs);
+new Chart(document.getElementById('jobsState'),{type:'bar',data:{labels:st.map(e=>e.scope),
+  datasets:[{data:st.map(e=>e.jobs),backgroundColor:'#2bd576cc',borderRadius:5}]},
+  options:{maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{y:{ticks:{callback:v=>fmt(v)}}}}});
+
+// ---- Investment by country ----
+const byC = {};
+DATA.data_centers.forEach(d=>{byC[d.country]=(byC[d.country]||0)+(d.investment_busd||0)});
+const cArr = Object.entries(byC).sort((a,b)=>b[1]-a[1]);
+new Chart(document.getElementById('investCountry'),{type:'bar',data:{labels:cArr.map(c=>c[0]),
+  datasets:[{data:cArr.map(c=>+c[1].toFixed(1)),backgroundColor:'#ffb224cc',borderRadius:5}]},
+  options:{maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{y:{title:{display:true,text:'$B'}}}}});
+
+// ---- Live grid cards ----
+const lk = DATA.live_kpis;
+document.getElementById('live').innerHTML = Object.entries(lk).map(([rid,k])=>`
+  <div class="card"><h3>${rid.toUpperCase()} grid region</h3>
+    <b>${k.dc_pct_of_demand}%</b><br/><span style="color:var(--muted);font-size:12.5px">
+    of ${Math.round(k.avg_demand_mw).toLocaleString()} MW avg demand served to ${k.dc_count} online DCs (${k.dc_capacity_mw.toLocaleString()} MW)</span></div>`).join('')
+  + `<div class="card"><h3>9 live demand feeds</h3><span style="color:var(--muted);font-size:12.5px">PJM · MISO · ERCOT · CAISO · SOCO · BPAT · SRP · NEVP · AZPS — hourly EIA ingestion, 48h rolling window, refreshed automatically by the Foundry schedule.</span></div>`;
+
+// ---- Table ----
+const cols = [['name','Facility'],['owner','Owner'],['country','Country'],['state','State'],['capacity_mw','MW'],['status','Status'],['ai_focused','AI'],['gpu_count','GPUs'],['operational_date','Online'],['investment_busd','$B']];
+let sortKey='capacity_mw', sortDir=-1;
+function renderTable(){
+  const rows=[...DATA.data_centers].sort((a,b)=>{const x=a[sortKey]??-1,y=b[sortKey]??-1;return (x<y?-1:x>y?1:0)*sortDir});
+  document.getElementById('dcTable').innerHTML =
+    '<thead><tr>'+cols.map(([k,l])=>`<th onclick="sortBy('${k}')">${l}${k===sortKey?(sortDir<0?' ▾':' ▴'):''}</th>`).join('')+'</tr></thead><tbody>'+
+    rows.map(d=>`<tr><td>${d.name}</td><td>${d.owner}</td><td>${d.country}</td><td>${d.state||'—'}</td>
+      <td>${d.capacity_mw.toLocaleString()}</td><td><span class="pill ${pills[d.status]||''}">${nice[d.status]||d.status}</span></td>
+      <td>${d.ai_focused?'🤖':'—'}</td><td>${d.gpu_count?fmt(d.gpu_count):'—'}</td>
+      <td>${d.operational_date?d.operational_date.slice(0,7):'—'}</td><td>${d.investment_busd?d.investment_busd:'—'}</td></tr>`).join('')+'</tbody>';
+}
+window.sortBy=k=>{sortDir = (k===sortKey)? -sortDir : -1; sortKey=k; renderTable();};
+renderTable();
+</script>
+</body>
+</html>
